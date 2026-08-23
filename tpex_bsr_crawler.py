@@ -244,6 +244,10 @@ class TPEXBrokerCrawler:
             print(f"[*] 正在啟動 TPEX 單一持久化極速引擎 (待抓取: {total} 檔)...")
             page = ChromiumPage(addr_or_opts=co)
             page.set.download_path(save_dir)
+            try:
+                page.download.set.show_msg(False)
+            except Exception:
+                pass
             page.get(self.TPEX_URL, retry=3, timeout=25)
             time.sleep(2)
 
@@ -270,9 +274,9 @@ class TPEXBrokerCrawler:
                     q_btn = page.ele("css:.btn-query", timeout=1) or page.ele("text:查詢", timeout=1)
                     if q_btn:
                         q_btn.click(by_js=True)
-                        time.sleep(0.3)
+                        time.sleep(0.2)
 
-                    # 4. 點擊下載按鈕並使用官方原生 to_download 等待機制 (零例外、零競爭)
+                    # 4. 點擊下載按鈕並使用官方原生 to_download 等待機制 (關閉進度條洗版)
                     d_btn = page.ele("text:下載 CSV (UTF-8)", timeout=1) or page.ele("text:下載 CSV", timeout=1)
                     if d_btn:
                         target_csv_file = os.path.join(save_dir, f"{sym}.csv")
@@ -281,7 +285,7 @@ class TPEXBrokerCrawler:
                             except OSError: pass
 
                         mission = d_btn.click.to_download(save_path=save_dir, rename=f"{sym}.csv")
-                        mission.wait(timeout=3.5)
+                        mission.wait(show=False, timeout=2.5)
 
                         ts_res = datetime.now().strftime("%H:%M:%S")
                         if os.path.exists(target_csv_file):
