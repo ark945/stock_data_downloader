@@ -98,33 +98,27 @@ def run_full_market_crawler(
 
     # 2. 抓取上櫃 (TPEX)
     if markets in ["all", "tpex"]:
-        print("\n>>> [階段 2/2] 啟動 TPEX 上櫃股票分點抓取...")
+        print("\n>>> [階段 2/2] 啟動 TPEX 上櫃股票分點抓取 (單一瀏覽器持久加速模式)...")
         tpex_symbols = TPEXBrokerCrawler.get_all_tpex_symbols()
         total_target_count += len(tpex_symbols)
         print(f"[*] 取得上櫃標的清單: {len(tpex_symbols)} 檔")
         
         tpex_crawler = TPEXBrokerCrawler()
-        tpex_success = 0
-        tpex_failed = []
+        tpex_dfs, tpex_failed = tpex_crawler.crawl_all_stocks_session(
+            stock_codes=tpex_symbols,
+            trade_date=trade_date
+        )
+        collected_dfs.extend(tpex_dfs)
         
-        for i, sym in enumerate(tpex_symbols, 1):
-            df_tpex = tpex_crawler.crawl_single_stock_browser(sym, trade_date)
-            if df_tpex is not None and not df_tpex.empty:
-                collected_dfs.append(df_tpex)
-                tpex_success += 1
-                print(f"  [{i}/{len(tpex_symbols)}] [OK] 上櫃 {sym} -> {len(df_tpex)} 筆")
-            else:
-                tpex_failed.append(sym)
-                all_failed_items.append({
-                    "symbol": sym,
-                    "name": name_map.get(sym, "未知"),
-                    "market": "TPEX",
-                    "reason": "上櫃無資料或下載逾時"
-                })
-                print(f"  [{i}/{len(tpex_symbols)}] [WARN] 上櫃 {sym} -> 無資料或略過")
-            sys.stdout.flush()
-
-        print(f"[✓] TPEX 上櫃抓取完成：成功 {tpex_success} 檔，未產出 {len(tpex_failed)} 檔")
+        for sym in tpex_failed:
+            all_failed_items.append({
+                "symbol": sym,
+                "name": name_map.get(sym, "未知"),
+                "market": "TPEX",
+                "reason": "上櫃無資料或下載逾時"
+            })
+            
+        print(f"[✓] TPEX 上櫃抓取完成：成功 {len(tpex_dfs)} 檔，未產出 {len(tpex_failed)} 檔")
 
     # 3. 聚合全市場資料並輸出
     if not collected_dfs:
