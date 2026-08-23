@@ -373,6 +373,10 @@ class TPEXBrokerCrawler:
             except Exception:
                 pass
             page.get(self.TPEX_URL, retry=3, timeout=25)
+            time.sleep(2.5)
+            stk_input = page.ele("css:input.code", timeout=4) or page.ele("@name=code", timeout=4)
+            q_btn = page.ele("css:.btn-query", timeout=1) or page.ele("text:查詢", timeout=1)
+            d_btn = page.ele("text:下載 CSV (UTF-8)", timeout=1) or page.ele("text:下載 CSV", timeout=1)
             consecutive_misses = 0
 
             for idx, sym in enumerate(stock_codes, 1):
@@ -423,6 +427,16 @@ class TPEXBrokerCrawler:
                     if d_btn:
                         mission = d_btn.click.to_download(save_path=save_dir, rename=f"{sym}.csv")
                         mission.wait(show=False, timeout=3.5)
+
+                        # 若第 1 次未下載成功，進行單檔即時重試 (Instant Retry)
+                        if not os.path.exists(target_csv_file):
+                            time.sleep(0.2)
+                            if q_btn:
+                                q_btn.click(by_js=True)
+                                time.sleep(0.3)
+                            if d_btn:
+                                mission2 = d_btn.click.to_download(save_path=save_dir, rename=f"{sym}.csv")
+                                mission2.wait(show=False, timeout=3.5)
 
                         ts_res = datetime.now().strftime("%H:%M:%S")
                         if os.path.exists(target_csv_file):
