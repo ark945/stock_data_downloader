@@ -206,7 +206,6 @@ class TPEXBrokerCrawler:
         temp_user_data = tempfile.mkdtemp()
 
         co = ChromiumOptions()
-        co.set_address("127.0.0.1:9222")
         co.set_argument("--no-sandbox")
         co.set_argument("--disable-gpu")
         co.set_argument("--disable-dev-shm-usage")
@@ -217,7 +216,7 @@ class TPEXBrokerCrawler:
         # 若在 Linux / GitHub Actions 無介面環境下，啟用 headless
         if sys.platform.startswith("linux"):
             co.set_argument("--headless=new")
-            for bin_path in ["/usr/bin/chromium-browser", "/usr/bin/chromium", "/usr/bin/google-chrome"]:
+            for bin_path in ["/usr/bin/google-chrome", "/usr/bin/chromium-browser", "/usr/bin/chromium"]:
                 if os.path.exists(bin_path):
                     co.set_browser_path(bin_path)
                     break
