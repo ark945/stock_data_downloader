@@ -237,52 +237,55 @@ class TPEXBrokerCrawler:
         start_t = time.time()
 
         try:
-            print(f"[*] 正在啟動 TPEX 批次持久化瀏覽器引擎 (待抓取: {total} 檔)...")
+            print(f"[*] 正在啟動 TPEX 雙分頁持久化加速引擎 (待抓取: {total} 檔)...")
             page = ChromiumPage(addr_or_opts=co)
             page.set.download_path(save_dir)
-            page.get(self.TPEX_URL, retry=3, timeout=25)
-            time.sleep(2)
+            
+            tab1 = page.get_tab()
+            tab1.get(self.TPEX_URL, retry=3, timeout=25)
+            
+            # 開啟第 2 個平行分頁
+            tab2 = page.new_tab()
+            tab2.get(self.TPEX_URL, retry=3, timeout=25)
+            time.sleep(1.5)
+            
+            tabs = [tab1, tab2]
 
             for idx, sym in enumerate(stock_codes, 1):
+                current_tab = tabs[(idx - 1) % 2]
                 try:
-                    # 1. 清空下載目錄避免舊檔干擾
-                    for old_f in glob.glob(os.path.join(save_dir, "*")):
-                        try: os.remove(old_f)
-                        except OSError: pass
-
-                    # 2. 尋找輸入框並填入代號
-                    stk_input = page.ele("css:input.code", timeout=6) or page.ele("@name=code", timeout=6)
+                    # 1. 尋找輸入框並填入代號
+                    stk_input = current_tab.ele("css:input.code", timeout=4) or current_tab.ele("@name=code", timeout=4)
                     if not stk_input:
-                        page.get(self.TPEX_URL, retry=2, timeout=15)
+                        current_tab.get(self.TPEX_URL, retry=2, timeout=15)
                         time.sleep(1)
-                        stk_input = page.ele("css:input.code", timeout=6) or page.ele("@name=code", timeout=6)
+                        stk_input = current_tab.ele("css:input.code", timeout=4) or current_tab.ele("@name=code", timeout=4)
                         if not stk_input:
                             failed_symbols.append(sym)
                             continue
 
                     stk_input.input(sym, clear=True, by_js=True)
-                    time.sleep(0.2)
 
-                    # 3. 點擊查詢按鈕
-                    q_btn = page.ele("css:.btn-query", timeout=1) or page.ele("text:查詢", timeout=1)
+                    # 2. 點擊查詢按鈕
+                    q_btn = current_tab.ele("css:.btn-query", timeout=1) or current_tab.ele("text:查詢", timeout=1)
                     if q_btn:
                         q_btn.click(by_js=True)
-                        time.sleep(0.2)
+                        time.sleep(0.15)
 
-                    # 檢查是否直接提示查無資料 (0.1s 快速跳過)
-                    if page.ele("text:查無符合條件之資料", timeout=0.1) or page.ele("text:查無資料", timeout=0.05):
+                    # 檢查是否直接提示查無資料 (快速跳過)
+                    if current_tab.ele("text:查無符合條件之資料", timeout=0.1) or current_tab.ele("text:查無資料", timeout=0.05):
                         failed_symbols.append(sym)
                         print(f"  [上櫃 {idx}/{total}] [無資料/跳過] {sym}")
                         continue
 
-                    # 4. 點擊下載按鈕
-                    d_btn = page.ele("text:下載 CSV (UTF-8)", timeout=1) or page.ele("text:下載 CSV", timeout=1)
+                    # 3. 點擊下載按鈕
+                    d_btn = current_tab.ele("text:下載 CSV (UTF-8)", timeout=1) or current_tab.ele("text:下載 CSV", timeout=1)
                     if d_btn:
                         d_btn.click(by_js=True)
                         
-                        # 5. 高頻極速輪詢 (0.05s 間隔，最多等 1.5 秒)
+                        # 4. 高頻極速輪詢 (0.05s 間隔，最多等 1.5 秒)
                         found_csv = None
-                        for _ in range(30):
+                        for _ in range(25):
                             time.sleep(0.05)
                             candidates = [
                                 os.path.join(save_dir, f) for f in os.listdir(save_dir)
