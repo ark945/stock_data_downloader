@@ -267,12 +267,12 @@ class TPEXBrokerCrawler:
                     q_btn = page.ele("css:.btn-query", timeout=1) or page.ele("text:查詢", timeout=1)
                     if q_btn:
                         q_btn.click(by_js=True)
-                        time.sleep(0.3)
+                        time.sleep(0.2)
 
-                    # 檢查是否直接提示查無資料 (快速跳過)
-                    if page.ele("text:查無符合條件之資料", timeout=0.3) or page.ele("text:查無資料", timeout=0.1):
+                    # 檢查是否直接提示查無資料 (0.1s 快速跳過)
+                    if page.ele("text:查無符合條件之資料", timeout=0.1) or page.ele("text:查無資料", timeout=0.05):
                         failed_symbols.append(sym)
-                        print(f"  [上櫃 {idx}/{total}] [無資料/跳過] {sym} (當日無分點交易)")
+                        print(f"  [上櫃 {idx}/{total}] [無資料/跳過] {sym}")
                         continue
 
                     # 4. 點擊下載按鈕
@@ -280,10 +280,10 @@ class TPEXBrokerCrawler:
                     if d_btn:
                         d_btn.click(by_js=True)
                         
-                        # 5. 高頻輪詢等待 CSV 完成下載 (0.1s 間隔，最多等 2 秒)
+                        # 5. 高頻極速輪詢 (0.05s 間隔，最多等 1.5 秒)
                         found_csv = None
-                        for _ in range(20):
-                            time.sleep(0.1)
+                        for _ in range(30):
+                            time.sleep(0.05)
                             candidates = [
                                 os.path.join(save_dir, f) for f in os.listdir(save_dir)
                                 if not f.endswith(".crdownload") and not f.endswith(".tmp") and os.path.getsize(os.path.join(save_dir, f)) > 100
@@ -299,10 +299,10 @@ class TPEXBrokerCrawler:
                                 elapsed = time.time() - start_t
                                 speed = idx / elapsed if elapsed > 0 else 0
                                 remain = (total - idx) / speed if speed > 0 else 0
-                                print(f"  [上櫃 {idx}/{total}] [OK] {sym} ({len(df)} 筆) | 速度: {speed:.1f} 檔/s | 剩餘約: {remain/60:.1f} 分鐘")
+                                print(f"  [上櫃 {idx}/{total}] [OK] {sym} ({len(df)} 筆) | 速度: {speed:.2f} 檔/s | 剩餘約: {remain/60:.1f} 分鐘")
                             else:
                                 failed_symbols.append(sym)
-                                print(f"  [上櫃 {idx}/{total}] [無資料/略過] {sym} -> 空檔案")
+                                print(f"  [上櫃 {idx}/{total}] [無資料/略過] {sym}")
                         else:
                             failed_symbols.append(sym)
                             print(f"  [上櫃 {idx}/{total}] [無資料/略過] {sym}")
