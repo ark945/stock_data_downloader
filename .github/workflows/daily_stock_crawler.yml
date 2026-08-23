@@ -17,7 +17,7 @@ on:
 
 jobs:
   crawler-shards:
-    name: 雲端平行節點 (分片 ${{ matrix.shard + 1 }}/4)
+    name: 雲端節點-分片-${{ matrix.shard }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     strategy:
