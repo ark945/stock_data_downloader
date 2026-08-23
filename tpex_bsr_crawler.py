@@ -16,8 +16,131 @@ import re
 from typing import List, Optional, Tuple
 from datetime import datetime
 import requests
+import multiprocessing
 import pandas as pd
 import numpy as np
+
+def _mp_tpex_worker_task(
+    worker_id: int,
+    symbols: List[str],
+    trade_date: str,
+    download_dir: str,
+    tpex_url: str,
+    result_queue: multiprocessing.Queue
+):
+    """獨立進程專屬的 Chromium Worker 任務 (完全隔離、零線程衝突)"""
+    from DrissionPage import ChromiumPage, ChromiumOptions
+
+    save_dir = os.path.join(download_dir, f"worker_proc_{worker_id}")
+    os.makedirs(save_dir, exist_ok=True)
+    temp_user_data = tempfile.mkdtemp()
+
+    if "DISPLAY" not in os.environ and os.name != "nt":
+        os.environ["DISPLAY"] = ":99"
+
+    co = ChromiumOptions()
+    co.set_local_port(9430 + worker_id)
+    if sys.platform.startswith("linux"):
+        for bin_p in ["/usr/bin/chromium-browser", "/usr/bin/chromium", "/usr/bin/google-chrome"]:
+            if os.path.exists(bin_p):
+                co.set_paths(browser_path=bin_p)
+                break
+
+    co.set_argument("--no-sandbox")
+    co.set_argument("--disable-gpu")
+    co.set_argument("--disable-dev-shm-usage")
+    co.set_argument("--disable-infobars")
+    co.set_argument("--window-size=1920,1080")
+    co.set_argument("--excludeSwitches", "enable-automation")
+    co.set_argument("--useAutomationExtension", False)
+
+    co.set_user_data_path(temp_user_data)
+    co.set_pref("download.default_directory", save_dir)
+    co.set_pref("download.prompt_for_download", False)
+    co.set_pref("safebrowsing.enabled", True)
+
+    page = None
+    collected_dfs = []
+    failed_symbols = []
+    worker_total = len(symbols)
+    crawler = TPEXBrokerCrawler(download_dir=download_dir)
+
+    try:
+        page = ChromiumPage(addr_or_opts=co)
+        page.set.download_path(save_dir)
+        try:
+            page.download.set.show_msg(False)
+        except Exception:
+            pass
+
+        # 錯開啟動時機，防止同時向 Cloudflare 發起初始握手
+        if worker_id > 1:
+            time.sleep((worker_id - 1) * 1.5)
+
+        page.get(tpex_url, retry=3, timeout=25)
+        time.sleep(2.5)
+
+        stk_input = page.ele("css:input.code", timeout=4) or page.ele("@name=code", timeout=4)
+        q_btn = page.ele("css:.btn-query", timeout=1) or page.ele("text:查詢", timeout=1)
+        d_btn = page.ele("text:下載 CSV (UTF-8)", timeout=1) or page.ele("text:下載 CSV", timeout=1)
+
+        for idx, sym in enumerate(symbols, 1):
+            try:
+                target_csv_file = os.path.join(save_dir, f"{sym}.csv")
+                if os.path.exists(target_csv_file):
+                    try: os.remove(target_csv_file)
+                    except OSError: pass
+
+                if not stk_input:
+                    stk_input = page.ele("css:input.code", timeout=3) or page.ele("@name=code", timeout=3)
+
+                if stk_input:
+                    stk_input.input(sym, clear=True, by_js=True)
+
+                if q_btn:
+                    q_btn.click(by_js=True)
+                    time.sleep(0.2)
+
+                if d_btn:
+                    mission = d_btn.click.to_download(save_path=save_dir, rename=f"{sym}.csv")
+                    mission.wait(show=False, timeout=3.5)
+
+                    ts_res = datetime.now().strftime("%H:%M:%S")
+                    if os.path.exists(target_csv_file):
+                        df = crawler.parse_tpex_csv_to_dataframe(target_csv_file, sym, trade_date)
+                        if df is not None and not df.empty:
+                            collected_dfs.append(df)
+                            print(f"[{ts_res}]   [W{worker_id} {idx}/{worker_total}] [OK] {sym} ({len(df)} 筆)")
+                        else:
+                            failed_symbols.append(sym)
+                            print(f"[{ts_res}]   [W{worker_id} {idx}/{worker_total}] [無資料/略過] {sym}")
+                    else:
+                        failed_symbols.append(sym)
+                        print(f"[{ts_res}]   [W{worker_id} {idx}/{worker_total}] [無資料/略過] {sym}")
+                else:
+                    ts_btn = datetime.now().strftime("%H:%M:%S")
+                    failed_symbols.append(sym)
+                    print(f"[{ts_btn}]   [W{worker_id} {idx}/{worker_total}] [查無按鈕] {sym}")
+
+            except Exception as e:
+                ts_err = datetime.now().strftime("%H:%M:%S")
+                failed_symbols.append(sym)
+                print(f"[{ts_err}]   [W{worker_id} {idx}/{worker_total}] [異常] {sym} ({e})")
+
+            sys.stdout.flush()
+
+    except Exception as e:
+        import traceback
+        print(f"[!] TPEX Worker {worker_id} 引擎異常: {e}")
+        traceback.print_exc()
+    finally:
+        if page:
+            try: page.quit()
+            except Exception: pass
+        shutil.rmtree(temp_user_data, ignore_errors=True)
+        shutil.rmtree(save_dir, ignore_errors=True)
+
+    result_queue.put((collected_dfs, failed_symbols))
 
 
 class TPEXBrokerCrawler:
@@ -195,10 +318,11 @@ class TPEXBrokerCrawler:
     def crawl_all_stocks_session(
         self,
         stock_codes: List[str],
-        trade_date: str
+        trade_date: str,
+        workers: int = 2
     ) -> Tuple[List[pd.DataFrame], List[str]]:
         """
-        使用單一持久化 Chromium 瀏覽器實例連續批次抓取全市場上櫃股票 (最穩定、零衝突)
+        使用 2 個獨立 Chromium 多進程 (2-Worker Multiprocessing) 錯時並行抓取全市場上櫃股票 (速度提升 2 倍)
         """
         try:
             from DrissionPage import ChromiumPage, ChromiumOptions
@@ -206,125 +330,40 @@ class TPEXBrokerCrawler:
             print("[!] 未安裝 DrissionPage，請執行 pip install DrissionPage")
             return [], stock_codes
 
-        save_dir = os.path.join(self.download_dir, "batch_session")
-        os.makedirs(save_dir, exist_ok=True)
-        temp_user_data = tempfile.mkdtemp()
-
-        if "DISPLAY" not in os.environ and os.name != "nt":
-            os.environ["DISPLAY"] = ":99"
-
-        co = ChromiumOptions()
-        co.set_local_port(9333)
-        if sys.platform.startswith("linux"):
-            for bin_p in ["/usr/bin/chromium-browser", "/usr/bin/chromium", "/usr/bin/google-chrome"]:
-                if os.path.exists(bin_p):
-                    co.set_paths(browser_path=bin_p)
-                    break
-
-        co.set_argument("--no-sandbox")
-        co.set_argument("--disable-gpu")
-        co.set_argument("--disable-dev-shm-usage")
-        co.set_argument("--disable-infobars")
-        co.set_argument("--window-size=1920,1080")
-        co.set_argument("--excludeSwitches", "enable-automation")
-        co.set_argument("--useAutomationExtension", False)
-
-        co.set_user_data_path(temp_user_data)
-        co.set_pref("download.default_directory", save_dir)
-        co.set_pref("download.prompt_for_download", False)
-        co.set_pref("safebrowsing.enabled", True)
-
-        page = None
-        collected_dfs = []
-        failed_symbols = []
         total = len(stock_codes)
         start_t = time.time()
+        print(f"[*] 正在啟動 TPEX 雙 Worker 多進程平行極速引擎 ({workers} Workers 並行，待抓取: {total} 檔)...")
 
-        try:
-            print(f"[*] 正在啟動 TPEX 單一持久化極速引擎 (待抓取: {total} 檔)...")
-            page = ChromiumPage(addr_or_opts=co)
-            page.set.download_path(save_dir)
-            try:
-                page.download.set.show_msg(False)
-            except Exception:
-                pass
-            page.get(self.TPEX_URL, retry=3, timeout=25)
-            time.sleep(2)
+        chunk_size = (total + workers - 1) // workers
+        chunks = [stock_codes[i:i + chunk_size] for i in range(0, total, chunk_size)]
 
-            for idx, sym in enumerate(stock_codes, 1):
-                try:
-                    # 1. 抓取前清空暫存目錄，防止讀到舊檔
-                    for old_f in glob.glob(os.path.join(save_dir, "*")):
-                        try: os.remove(old_f)
-                        except OSError: pass
+        processes = []
+        queues = []
 
-                    # 2. 尋找輸入框並填入代號
-                    stk_input = page.ele("css:input.code", timeout=4) or page.ele("@name=code", timeout=4)
-                    if not stk_input:
-                        page.get(self.TPEX_URL, retry=2, timeout=15)
-                        time.sleep(1)
-                        stk_input = page.ele("css:input.code", timeout=4) or page.ele("@name=code", timeout=4)
-                        if not stk_input:
-                            failed_symbols.append(sym)
-                            continue
+        for w_id, chunk in enumerate(chunks, 1):
+            q = multiprocessing.Queue()
+            p = multiprocessing.Process(
+                target=_mp_tpex_worker_task,
+                args=(w_id, chunk, trade_date, self.download_dir, self.TPEX_URL, q)
+            )
+            processes.append(p)
+            queues.append(q)
+            p.start()
 
-                    stk_input.input(sym, clear=True, by_js=True)
+        all_collected_dfs = []
+        all_failed_symbols = []
 
-                    # 3. 點擊查詢按鈕
-                    q_btn = page.ele("css:.btn-query", timeout=1) or page.ele("text:查詢", timeout=1)
-                    if q_btn:
-                        q_btn.click(by_js=True)
-                        time.sleep(0.2)
+        for q in queues:
+            dfs, failed = q.get()
+            all_collected_dfs.extend(dfs)
+            all_failed_symbols.extend(failed)
 
-                    # 4. 點擊下載按鈕並使用官方原生 to_download 等待機制 (關閉進度條洗版)
-                    d_btn = page.ele("text:下載 CSV (UTF-8)", timeout=1) or page.ele("text:下載 CSV", timeout=1)
-                    if d_btn:
-                        target_csv_file = os.path.join(save_dir, f"{sym}.csv")
-                        if os.path.exists(target_csv_file):
-                            try: os.remove(target_csv_file)
-                            except OSError: pass
+        for p in processes:
+            p.join()
 
-                        mission = d_btn.click.to_download(save_path=save_dir, rename=f"{sym}.csv")
-                        mission.wait(show=False, timeout=2.5)
+        elapsed = time.time() - start_t
+        speed = total / elapsed if elapsed > 0 else 0
+        ts_end = datetime.now().strftime("%H:%M:%S")
+        print(f"[{ts_end}] [OK] TPEX 雙 Worker 平行抓取完成！共耗時 {elapsed:.1f} 秒 ({elapsed/60:.1f} 分鐘)，平均速度: {speed:.2f} 檔/s")
 
-                        ts_res = datetime.now().strftime("%H:%M:%S")
-                        if os.path.exists(target_csv_file):
-                            df = self.parse_tpex_csv_to_dataframe(target_csv_file, sym, trade_date)
-                            if df is not None and not df.empty:
-                                collected_dfs.append(df)
-                                elapsed = time.time() - start_t
-                                speed = idx / elapsed if elapsed > 0 else 0
-                                remain = (total - idx) / speed if speed > 0 else 0
-                                print(f"[{ts_res}]   [上櫃 {idx}/{total}] [OK] {sym} ({len(df)} 筆) | 速度: {speed:.2f} 檔/s | 剩餘約: {remain/60:.1f} 分鐘")
-                            else:
-                                failed_symbols.append(sym)
-                                print(f"[{ts_res}]   [上櫃 {idx}/{total}] [無資料/略過] {sym}")
-                        else:
-                            failed_symbols.append(sym)
-                            print(f"[{ts_res}]   [上櫃 {idx}/{total}] [無資料/略過] {sym}")
-                    else:
-                        ts_btn = datetime.now().strftime("%H:%M:%S")
-                        failed_symbols.append(sym)
-                        print(f"[{ts_btn}]   [上櫃 {idx}/{total}] [查無按鈕] {sym}")
-
-                except Exception as e:
-                    ts_err = datetime.now().strftime("%H:%M:%S")
-                    failed_symbols.append(sym)
-                    print(f"[{ts_err}]   [上櫃 {idx}/{total}] [異常] {sym} ({e})")
-
-                sys.stdout.flush()
-
-        except Exception as e:
-            import traceback
-            print(f"[!] TPEX 瀏覽器批次引擎異常: {e}")
-            traceback.print_exc()
-        finally:
-            if page:
-                try:
-                    page.quit()
-                except Exception:
-                    pass
-            shutil.rmtree(temp_user_data, ignore_errors=True)
-            shutil.rmtree(save_dir, ignore_errors=True)
-
-        return collected_dfs, failed_symbols
+        return all_collected_dfs, all_failed_symbols
