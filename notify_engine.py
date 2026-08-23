@@ -28,10 +28,11 @@ def send_telegram_report(
     chat_id: Optional[str] = None
 ) -> bool:
     """發送 Telegram 即時推播報表"""
-    token = bot_token or os.getenv("TELEGRAM_BOT_TOKEN", "8289732762:AAHyI84VYLSRNbjXjHeedpnP1h5v0UkfIxg")
-    cid = chat_id or os.getenv("TELEGRAM_CHAT_ID", "1634376784")
+    token = bot_token or os.getenv("TELEGRAM_BOT_TOKEN", "")
+    cid = chat_id or os.getenv("TELEGRAM_CHAT_ID", "")
 
     if not token or not cid:
+        print("[*] 未設定 TELEGRAM_BOT_TOKEN 或 TELEGRAM_CHAT_ID，略過 Telegram 推播。")
         return False
 
     failed_count = len(failed_stocks)
