@@ -192,18 +192,21 @@ class TPEXBrokerCrawler:
             print(f"[!] 解析 TPEX CSV 失敗 ({stock_id}): {e}")
             return None
 
-    def _crawl_worker_task(
+    def crawl_all_stocks_session(
         self,
-        worker_id: int,
-        symbols: List[str],
-        trade_date: str,
-        total_all: int,
-        start_global_t: float
+        stock_codes: List[str],
+        trade_date: str
     ) -> Tuple[List[pd.DataFrame], List[str]]:
-        """單一獨立 Worker 專屬的持久會話抓取任務"""
-        from DrissionPage import ChromiumPage, ChromiumOptions
+        """
+        使用單一持久化 Chromium 瀏覽器實例連續批次抓取全市場上櫃股票 (最穩定、零衝突)
+        """
+        try:
+            from DrissionPage import ChromiumPage, ChromiumOptions
+        except ImportError:
+            print("[!] 未安裝 DrissionPage，請執行 pip install DrissionPage")
+            return [], stock_codes
 
-        save_dir = os.path.join(self.download_dir, f"worker_{worker_id}")
+        save_dir = os.path.join(self.download_dir, "batch_session")
         os.makedirs(save_dir, exist_ok=True)
         temp_user_data = tempfile.mkdtemp()
 
@@ -211,7 +214,7 @@ class TPEXBrokerCrawler:
             os.environ["DISPLAY"] = ":99"
 
         co = ChromiumOptions()
-        co.set_local_port(9333 + worker_id)
+        co.set_local_port(9333)
         if sys.platform.startswith("linux"):
             for bin_p in ["/usr/bin/chromium-browser", "/usr/bin/chromium", "/usr/bin/google-chrome"]:
                 if os.path.exists(bin_p):
@@ -234,17 +237,19 @@ class TPEXBrokerCrawler:
         page = None
         collected_dfs = []
         failed_symbols = []
-        worker_total = len(symbols)
+        total = len(stock_codes)
+        start_t = time.time()
 
         try:
+            print(f"[*] 正在啟動 TPEX 單一持久化極速引擎 (待抓取: {total} 檔)...")
             page = ChromiumPage(addr_or_opts=co)
             page.set.download_path(save_dir)
             page.get(self.TPEX_URL, retry=3, timeout=25)
             time.sleep(2)
 
-            for idx, sym in enumerate(symbols, 1):
+            for idx, sym in enumerate(stock_codes, 1):
                 try:
-                    # 1. 抓取前清空專屬下載目錄，防止讀到舊檔
+                    # 1. 抓取前清空暫存目錄，防止讀到舊檔
                     for old_f in glob.glob(os.path.join(save_dir, "*")):
                         try: os.remove(old_f)
                         except OSError: pass
@@ -265,53 +270,49 @@ class TPEXBrokerCrawler:
                     q_btn = page.ele("css:.btn-query", timeout=1) or page.ele("text:查詢", timeout=1)
                     if q_btn:
                         q_btn.click(by_js=True)
-                        time.sleep(0.5)
+                        time.sleep(0.3)
 
-                    # 4. 點擊下載按鈕
+                    # 4. 點擊下載按鈕並使用官方原生 to_download 等待機制 (零例外、零競爭)
                     d_btn = page.ele("text:下載 CSV (UTF-8)", timeout=1) or page.ele("text:下載 CSV", timeout=1)
                     if d_btn:
-                        d_btn.click(by_js=True)
-                        
-                        # 輪詢等待 CSV 檔案寫入 (0.1s 間隔，最多等 2.5 秒)
-                        found_csv = None
-                        for _ in range(25):
-                            time.sleep(0.1)
-                            candidates = [
-                                os.path.join(save_dir, f) for f in os.listdir(save_dir)
-                                if not f.endswith(".crdownload") and not f.endswith(".tmp") and os.path.getsize(os.path.join(save_dir, f)) > 10
-                            ]
-                            if candidates:
-                                found_csv = candidates[0]
-                                break
+                        target_csv_file = os.path.join(save_dir, f"{sym}.csv")
+                        if os.path.exists(target_csv_file):
+                            try: os.remove(target_csv_file)
+                            except OSError: pass
+
+                        mission = d_btn.click.to_download(save_path=save_dir, rename=f"{sym}.csv")
+                        mission.wait(timeout=3.5)
 
                         ts_res = datetime.now().strftime("%H:%M:%S")
-                        if found_csv and os.path.exists(found_csv):
-                            df = self.parse_tpex_csv_to_dataframe(found_csv, sym, trade_date)
+                        if os.path.exists(target_csv_file):
+                            df = self.parse_tpex_csv_to_dataframe(target_csv_file, sym, trade_date)
                             if df is not None and not df.empty:
                                 collected_dfs.append(df)
-                                elapsed = time.time() - start_global_t
-                                print(f"[{ts_res}] [W{worker_id} {idx}/{worker_total}] [OK] {sym} ({len(df)} 筆)")
+                                elapsed = time.time() - start_t
+                                speed = idx / elapsed if elapsed > 0 else 0
+                                remain = (total - idx) / speed if speed > 0 else 0
+                                print(f"[{ts_res}]   [上櫃 {idx}/{total}] [OK] {sym} ({len(df)} 筆) | 速度: {speed:.2f} 檔/s | 剩餘約: {remain/60:.1f} 分鐘")
                             else:
                                 failed_symbols.append(sym)
-                                print(f"[{ts_res}] [W{worker_id} {idx}/{worker_total}] [無資料/略過] {sym}")
+                                print(f"[{ts_res}]   [上櫃 {idx}/{total}] [無資料/略過] {sym}")
                         else:
                             failed_symbols.append(sym)
-                            print(f"[{ts_res}] [W{worker_id} {idx}/{worker_total}] [無資料/略過] {sym}")
+                            print(f"[{ts_res}]   [上櫃 {idx}/{total}] [無資料/略過] {sym}")
                     else:
                         ts_btn = datetime.now().strftime("%H:%M:%S")
                         failed_symbols.append(sym)
-                        print(f"[{ts_btn}] [W{worker_id} {idx}/{worker_total}] [查無按鈕] {sym}")
+                        print(f"[{ts_btn}]   [上櫃 {idx}/{total}] [查無按鈕] {sym}")
 
                 except Exception as e:
                     ts_err = datetime.now().strftime("%H:%M:%S")
                     failed_symbols.append(sym)
-                    print(f"[{ts_err}] [W{worker_id} {idx}/{worker_total}] [異常] {sym} ({e})")
+                    print(f"[{ts_err}]   [上櫃 {idx}/{total}] [異常] {sym} ({e})")
 
                 sys.stdout.flush()
 
         except Exception as e:
             import traceback
-            print(f"[!] TPEX Worker {worker_id} 引擎異常: {e}")
+            print(f"[!] TPEX 瀏覽器批次引擎異常: {e}")
             traceback.print_exc()
         finally:
             if page:
@@ -323,57 +324,3 @@ class TPEXBrokerCrawler:
             shutil.rmtree(save_dir, ignore_errors=True)
 
         return collected_dfs, failed_symbols
-
-    def crawl_all_stocks_session(
-        self,
-        stock_codes: List[str],
-        trade_date: str,
-        workers: int = 2
-    ) -> Tuple[List[pd.DataFrame], List[str]]:
-        """
-        使用雙 Worker (2-Worker) 獨立進程平行持久化引擎連續批次抓取全市場上櫃股票 (速度提升 2 倍)
-        """
-        try:
-            from DrissionPage import ChromiumPage, ChromiumOptions
-        except ImportError:
-            print("[!] 未安裝 DrissionPage，請執行 pip install DrissionPage")
-            return [], stock_codes
-
-        from concurrent.futures import ThreadPoolExecutor
-
-        total = len(stock_codes)
-        start_t = time.time()
-        print(f"[*] 正在啟動 TPEX 雙 Worker 平行極速引擎 ({workers} Workers 並行，待抓取: {total} 檔)...")
-
-        # 將標的分組給 2 個 Worker
-        chunk_size = (total + workers - 1) // workers
-        chunks = [stock_codes[i:i + chunk_size] for i in range(0, total, chunk_size)]
-
-        all_collected_dfs = []
-        all_failed_symbols = []
-
-        with ThreadPoolExecutor(max_workers=workers) as executor:
-            futures = []
-            for w_id, chunk in enumerate(chunks, 1):
-                futures.append(
-                    executor.submit(
-                        self._crawl_worker_task,
-                        w_id,
-                        chunk,
-                        trade_date,
-                        total,
-                        start_t
-                    )
-                )
-
-            for future in futures:
-                dfs, failed = future.result()
-                all_collected_dfs.extend(dfs)
-                all_failed_symbols.extend(failed)
-
-        elapsed = time.time() - start_t
-        speed = total / elapsed if elapsed > 0 else 0
-        ts_end = datetime.now().strftime("%H:%M:%S")
-        print(f"[{ts_end}] [OK] TPEX 雙 Worker 平行抓取完成！共耗時 {elapsed:.1f} 秒 ({elapsed/60:.1f} 分鐘)，平均速度: {speed:.2f} 檔/s")
-
-        return all_collected_dfs, all_failed_symbols
