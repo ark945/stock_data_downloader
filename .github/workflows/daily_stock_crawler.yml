@@ -19,11 +19,11 @@ jobs:
   crawler-shards:
     name: 雲端節點-分片-${{ matrix.shard }}
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3] # 4 台完全獨立微軟雲端虛擬機 (4 個獨立 IP)
+        shard: [0, 1, 2, 3, 4, 5] # 6 台完全獨立微軟雲端虛擬機 (6 個獨立 IP)
 
     steps:
       - name: 檢出專案代碼 (Checkout)
@@ -69,9 +69,9 @@ jobs:
           fi
           
           if [ -n "$TARGET_DATE" ]; then
-            python "$TARGET_SCRIPT" --market "$MARKET" --date "$TARGET_DATE" --workers 8 --max-rounds 5 --shard-id ${{ matrix.shard }} --num-shards 4 --no-excel
+            python "$TARGET_SCRIPT" --market "$MARKET" --date "$TARGET_DATE" --workers 8 --max-rounds 5 --shard-id ${{ matrix.shard }} --num-shards 6 --no-excel
           else
-            python "$TARGET_SCRIPT" --market "$MARKET" --workers 8 --max-rounds 5 --shard-id ${{ matrix.shard }} --num-shards 4 --no-excel
+            python "$TARGET_SCRIPT" --market "$MARKET" --workers 8 --max-rounds 5 --shard-id ${{ matrix.shard }} --num-shards 6 --no-excel
           fi
 
       - name: 上傳分片 Parquet 產物
