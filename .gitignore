@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+downloads_tpex/
+temp_test/
+*.tmp
+output/*.parquet
+output/*.xlsx

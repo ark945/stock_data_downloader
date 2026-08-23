@@ -1,0 +1,11 @@
+# 台股全市場券商分點資料下載系統 (Stock Data Downloader) 依賴清單
+requests>=2.28.0
+pandas>=2.0.0
+numpy>=1.24.0
+pyarrow>=14.0.0
+openpyxl>=3.1.0
+beautifulsoup4>=4.12.0
+Pillow>=9.5.0
+ddddocr>=1.4.7
+opencv-python>=4.8.0
+DrissionPage>=4.0.0

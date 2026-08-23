@@ -1,0 +1,82 @@
+name: 每日全市場券商分點爬蟲排程
+
+on:
+  schedule:
+    # 每週一至週五 台灣時間 20:30 (UTC 12:30)
+    - cron: '30 12 * * 1-5'
+  workflow_dispatch: # 支援在 GitHub 網頁手動一鍵觸發
+    inputs:
+      target_date:
+        description: '指定抓取日期 (YYYY-MM-DD，留空則自動判斷最新交易日)'
+        required: false
+        default: ''
+      market:
+        description: '抓取市場 (all / twse / tpex)'
+        required: true
+        default: 'all'
+
+jobs:
+  run-crawler:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: 檢出專案代碼 (Checkout)
+        uses: actions/checkout@v4
+
+      - name: 設定 Python 環境
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: 安裝系統依賴 (Chromium for TPEX)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y chromium-browser xvfb
+
+      - name: 安裝 Python 套件依賴
+        run: |
+          pip install --upgrade pip
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          elif [ -f stock_data_downloader/requirements.txt ]; then
+            pip install -r stock_data_downloader/requirements.txt
+          fi
+          pip install tensorflow
+
+      - name: 執行全市場分點爬蟲 (僅產出 Parquet 高效儲存)
+        env:
+          PYTHONIOENCODING: "utf-8"
+        run: |
+          TARGET_DATE="${{ github.event.inputs.target_date }}"
+          MARKET="${{ github.event.inputs.market }}"
+          
+          if [ -z "$MARKET" ]; then
+            MARKET="all"
+          fi
+          
+          if [ -f "stock_crawler_coordinator.py" ]; then
+            TARGET_SCRIPT="stock_crawler_coordinator.py"
+          elif [ -f "stock_data_downloader/stock_crawler_coordinator.py" ]; then
+            TARGET_SCRIPT="stock_data_downloader/stock_crawler_coordinator.py"
+          else
+            TARGET_SCRIPT="dataProject/stock_crawler_coordinator.py"
+          fi
+          
+          if [ -n "$TARGET_DATE" ]; then
+            python "$TARGET_SCRIPT" --market "$MARKET" --date "$TARGET_DATE" --workers 2 --no-excel
+          else
+            python "$TARGET_SCRIPT" --market "$MARKET" --workers 2 --no-excel
+          fi
+
+      - name: 上傳成果為 GitHub Artifact (僅 Parquet，保留 7 天)
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: stock-bsr-parquet-${{ github.run_number }}
+          path: |
+            output/*.parquet
+            stock_data_downloader/output/*.parquet
+            dataProject/output/*.parquet
+          retention-days: 7
