@@ -58,8 +58,8 @@ def format_duration(seconds: float) -> str:
 def run_full_market_crawler(
     trade_date: Optional[str] = None,
     markets: str = "all",
-    workers: int = 8,
-    max_rounds: int = 5,
+    workers: int = 4,
+    max_rounds: int = 6,
     output_dir: str = None,
     export_excel: bool = True,
     receiver_email: Optional[str] = None,
