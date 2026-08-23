@@ -181,9 +181,9 @@ def run_full_market_crawler(
         parquet_filename = f"api_absr1_{trade_date}_{trade_date}{market_suffix}.parquet"
         
     parquet_path = os.path.join(output_dir, parquet_filename)
-    full_df.to_parquet(parquet_path, index=False)
+    full_df.to_parquet(parquet_path, compression="zstd", index=False)
     p_size_mb = os.path.getsize(parquet_path) / (1024 * 1024)
-    log_msg(f"[✓] Parquet 檔案已儲存: {parquet_path} ({p_size_mb:.2f} MB)")
+    log_msg(f"[✓] Parquet 檔案已儲存: {parquet_path} ({p_size_mb:.2f} MB, ZSTD 高度壓縮)")
 
     # 輸出 Excel 檔案
     if export_excel:

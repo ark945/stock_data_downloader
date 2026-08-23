@@ -198,7 +198,7 @@ def merge_parquet_shards(output_dir: str = "output", trade_date: str = "", marke
 
     final_filename = f"api_absr1_{trade_date}_{trade_date}{market_suffix}.parquet"
     final_parquet = os.path.join(output_dir, final_filename)
-    full_df.to_parquet(final_parquet, index=False)
+    full_df.to_parquet(final_parquet, compression="zstd", index=False)
 
     total_symbols = full_df["symbol"].nunique()
     total_rows = len(full_df)
