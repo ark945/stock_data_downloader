@@ -157,18 +157,28 @@ class TWSEBrokerCrawler:
                     "CaptchaControl1": captcha_code,
                     "btnOK": "查詢",
                 }
-                session.post(self.MENU_URL, data=payload, timeout=8)
+                r_post = session.post(self.MENU_URL, data=payload, timeout=8)
+                post_html = r_post.text
+
+                # 快速判斷：若是「查無此代碼」或「查無成交資料」，代表當日無交易，無需進行無效重試！
+                if "查無此代碼" in post_html or "查無符合條件之資料" in post_html or "查無資料" in post_html or "查無成交資料" in post_html:
+                    return ""
+
+                # 若是驗證碼錯誤，才進行下一次換圖重試
+                if "驗證碼錯誤" in post_html or "驗證碼不符" in post_html:
+                    time.sleep(0.1)
+                    continue
 
                 # 4. 下載 CSV 內容
                 r_content = session.get(self.CONTENT_URL, timeout=8)
-                if r_content.status_code == 200 and len(r_content.content) > 300:
+                if r_content.status_code == 200 and len(r_content.content) > 100:
                     raw_text = r_content.content.decode("utf-8-sig", errors="replace")
                     if "券商買賣股票成交價量資訊" in raw_text or "股票代碼" in raw_text:
                         return raw_text
 
             except Exception:
                 pass
-            time.sleep(0.2)
+            time.sleep(0.1)
 
         return None
 
@@ -275,8 +285,8 @@ class TWSEBrokerCrawler:
     def crawl_stocks(
         self,
         symbols: List[str],
-        trade_date: Optional[str] = None,
-        max_workers: int = 2,
+        trade_date: str = "",
+        max_workers: int = 8,
         max_retry_rounds: int = 5
     ) -> Tuple[List[pd.DataFrame], List[str], int]:
         """
@@ -346,11 +356,11 @@ class TWSEBrokerCrawler:
             ts_round = datetime.now().strftime("%H:%M:%S")
             print(f"\n" + "-"*50)
             print(f"[{ts_round}] [*] 啟動第 {rounds_executed}/{max_retry_rounds} 輪精準安全補抓佇列 (待補抓: {retry_count} 檔)")
-            print(f"[{ts_round}] [*] 安全防護策略: 單執行緒模式, 請求間隔 {current_delay}s, 預防 TWSE 頻率限制")
+            print(f"[{ts_round}] [*] 安全防護策略: 4-Workers 安全並行模式, 請求間隔 {current_delay}s, 預防 TWSE 頻率限制")
             print(f"-"*50)
             sys.stdout.flush()
             
-            time.sleep(3)  # 輪次切換冷卻 3 秒
+            time.sleep(2)  # 輪次切換冷卻 2 秒
             
             # 載入名稱快取以利友善顯示
             name_map = {}
@@ -363,25 +373,33 @@ class TWSEBrokerCrawler:
                 except Exception:
                     pass
 
-            retry_crawler = TWSEBrokerCrawler(delay_sec=current_delay, max_retries=6)
+            retry_crawler = TWSEBrokerCrawler(delay_sec=current_delay, max_retries=4)
             still_failed = []
             retry_success = 0
+            retry_done_cnt = 0
 
-            for i, sym in enumerate(failed_symbols, 1):
-                sym_name = name_map.get(sym, "")
-                name_str = f"({sym_name})" if sym_name else ""
-                
-                sym, df = retry_crawler._crawl_single_worker(sym, trade_date)
-                ts_item = datetime.now().strftime("%H:%M:%S")
-                if df is not None and not df.empty:
-                    all_dfs.append(df)
-                    total_rows += len(df)
-                    retry_success += 1
-                    print(f"[{ts_item}]   [第{rounds_executed}輪 {i}/{retry_count}] [OK] {sym} {name_str} -> 成功補回 {len(df)} 筆！")
-                else:
-                    still_failed.append(sym)
-                    print(f"[{ts_item}]   [第{rounds_executed}輪 {i}/{retry_count}] [未成功/無交易] {sym} {name_str} -> 查無分點或重試逾時")
-                sys.stdout.flush()
+            with ThreadPoolExecutor(max_workers=4) as retry_exec:
+                future_map = {
+                    retry_exec.submit(retry_crawler._crawl_single_worker, s, trade_date): s
+                    for s in failed_symbols
+                }
+
+                for fut in as_completed(future_map):
+                    retry_done_cnt += 1
+                    sym, df = fut.result()
+                    sym_name = name_map.get(sym, "")
+                    name_str = f"({sym_name})" if sym_name else ""
+                    ts_item = datetime.now().strftime("%H:%M:%S")
+
+                    if df is not None and not df.empty:
+                        all_dfs.append(df)
+                        total_rows += len(df)
+                        retry_success += 1
+                        print(f"[{ts_item}]   [第{rounds_executed}輪 {retry_done_cnt}/{retry_count}] [OK] {sym} {name_str} -> 成功補回 {len(df)} 筆！")
+                    else:
+                        still_failed.append(sym)
+                        print(f"[{ts_item}]   [第{rounds_executed}輪 {retry_done_cnt}/{retry_count}] [無交易/略過] {sym} {name_str}")
+                    sys.stdout.flush()
 
             ts_done = datetime.now().strftime("%H:%M:%S")
             print(f"[{ts_done}] [+] 第 {rounds_executed} 輪補抓完成！成功救回 {retry_success}/{retry_count} 檔 (剩餘未成功: {len(still_failed)} 檔)")

@@ -233,8 +233,8 @@ def main():
     parser.add_argument(
         "--workers",
         type=int,
-        default=4,
-        help="TWSE 併發下載線程數 (預設: 4，兼顧極速與防封鎖)",
+        default=8,
+        help="TWSE 併發下載線程數 (預設: 8，兼顧極速與防封鎖)",
     )
     parser.add_argument("--max-rounds", type=int, default=5, help="上市最大安全補抓輪數 (預設 5 輪)")
     parser.add_argument("--no-excel", action="store_true", help="略過產出 Excel 檔")
