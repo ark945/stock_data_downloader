@@ -284,7 +284,7 @@ class TPEXBrokerCrawler:
                             time.sleep(0.1)
                             candidates = [
                                 os.path.join(save_dir, f) for f in os.listdir(save_dir)
-                                if not f.endswith(".crdownload") and not f.endswith(".tmp") and os.path.getsize(os.path.join(save_dir, f)) > 100
+                                if not f.endswith(".crdownload") and not f.endswith(".tmp") and os.path.getsize(os.path.join(save_dir, f)) > 10
                             ]
                             if candidates:
                                 found_csv = candidates[0]
