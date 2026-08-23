@@ -102,10 +102,10 @@ class TPEXBrokerCrawler:
             else:
                 lines = str(csv_file_or_text).splitlines()
 
-            # TPEX 格式前 2 行包含：證券代碼,XXXX
+            # TPEX 格式前 2 行包含：證券代號,XXXX 或 證券代碼,XXXX
             # 嚴格校驗 CSV 內部代碼是否符合目標 stock_id，防止誤讀舊檔
             content_header = "".join(lines[:5])
-            if "證券代碼" in content_header and stock_id not in content_header:
+            if ("證券代碼" in content_header or "證券代號" in content_header) and stock_id not in content_header:
                 return None
 
             # 找到包含「序號」或「券商」的資料起點
@@ -242,22 +242,25 @@ class TPEXBrokerCrawler:
         start_t = time.time()
 
         try:
-            print(f"[*] 正在啟動 TPEX 雙分頁持久化加速引擎 (待抓取: {total} 檔)...")
+            print(f"[*] 正在啟動 TPEX 三分頁持久化加速引擎 (待抓取: {total} 檔)...")
             page = ChromiumPage(addr_or_opts=co)
             page.set.download_path(save_dir)
             
             tab1 = page.get_tab()
             tab1.get(self.TPEX_URL, retry=3, timeout=25)
             
-            # 開啟第 2 個平行分頁
+            # 開啟第 2 與第 3 個平行分頁
             tab2 = page.new_tab()
             tab2.get(self.TPEX_URL, retry=3, timeout=25)
+            
+            tab3 = page.new_tab()
+            tab3.get(self.TPEX_URL, retry=3, timeout=25)
             time.sleep(1.5)
             
-            tabs = [tab1, tab2]
+            tabs = [tab1, tab2, tab3]
 
             for idx, sym in enumerate(stock_codes, 1):
-                current_tab = tabs[(idx - 1) % 2]
+                current_tab = tabs[(idx - 1) % 3]
                 try:
                     # 1. 抓取前清空暫存目錄，防止讀到舊檔
                     for old_f in glob.glob(os.path.join(save_dir, "*")):
