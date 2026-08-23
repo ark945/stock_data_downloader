@@ -162,8 +162,23 @@ def run_full_market_crawler(
     print(f"[+] 總標的成功率: {unique_symbols}/{total_target_count} ({unique_symbols/total_target_count*100:.1f}%)")
     print("==================================================")
 
-    # 4. 發送 Email 通知報告
-    print("\n>>> [郵件通知] 檢查並發送執行成果與短缺股票日報...")
+    # 4. 發送 Telegram 推播與 Email 通知報告
+    print("\n>>> [通知推播] 檢查並發送執行成果與短缺股票日報...")
+    from notify_engine import send_telegram_report, send_crawler_report_email
+    
+    # 優先發送 Telegram 即時推播
+    send_telegram_report(
+        trade_date=trade_date,
+        total_target=total_target_count,
+        success_count=unique_symbols,
+        no_trade_count=0,
+        failed_stocks=all_failed_items,
+        total_rows=total_rows,
+        elapsed_seconds=elapsed_total,
+        rounds_executed=rounds_executed
+    )
+
+    # 次要發送 Email (若有設定 SMTP)
     send_crawler_report_email(
         trade_date=trade_date,
         total_target=total_target_count,

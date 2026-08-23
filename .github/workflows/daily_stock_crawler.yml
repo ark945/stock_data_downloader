@@ -45,9 +45,11 @@ jobs:
           fi
           pip install tensorflow
 
-      - name: 執行全市場分點爬蟲 (5 輪安全補抓 + Email 短缺日報)
+      - name: 執行全市場分點爬蟲 (5 輪安全補抓 + Telegram/Email 通知)
         env:
           PYTHONIOENCODING: "utf-8"
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
           SMTP_USER: ${{ secrets.SMTP_USER }}
