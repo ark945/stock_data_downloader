@@ -121,8 +121,8 @@ jobs:
           GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID || '1L6f9jQx9phz_ZoVfDmBQViEVnoDHh_0a' }}
           TARGET_DATE: ${{ github.event.inputs.target_date }}
         run: |
-          mkdir -p output
-          find download_shards -name "*.parquet" -exec cp {} output/ \;
+          mkdir -p download_shards output
+          find . -name "*_shard_*.parquet" -exec cp {} output/ \; 2>/dev/null || true
           
           if [ -f "merge_shards.py" ]; then
             MERGE_SCRIPT="merge_shards.py"
