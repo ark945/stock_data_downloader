@@ -83,7 +83,5 @@ jobs:
         with:
           name: stock-bsr-parquet-${{ github.run_number }}
           path: |
-            output/*.parquet
-            stock_data_downloader/output/*.parquet
-            dataProject/output/*.parquet
+            **/output/*.parquet
           retention-days: 7
