@@ -10,7 +10,22 @@ import glob
 import time
 from datetime import datetime
 import pandas as pd
-from notification_service import send_telegram_alert, send_email_alert
+import requests
+
+def send_telegram_alert(bot_token: str, chat_id: str, message: str) -> bool:
+    try:
+        url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+        payload = {"chat_id": chat_id, "text": message, "parse_mode": "Markdown"}
+        r = requests.post(url, json=payload, timeout=10)
+        if r.status_code == 200:
+            print("[✓] Telegram 推播通知發送成功！")
+            return True
+        else:
+            print(f"[!] Telegram 推播失敗 (HTTP {r.status_code}): {r.text}")
+            return False
+    except Exception as e:
+        print(f"[!] Telegram 發送異常: {e}")
+        return False
 
 def merge_parquet_shards(output_dir: str = "output", trade_date: str = ""):
     if not os.path.isabs(output_dir):
