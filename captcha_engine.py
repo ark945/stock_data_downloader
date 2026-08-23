@@ -43,17 +43,13 @@ def _get_cnn_model():
         _cnn_load_attempted = True
         if os.path.exists(MODEL_PATH):
             try:
-                import cv2
-                import numpy as np
-                from keras.models import load_model
+                try:
+                    from tensorflow.keras.models import load_model
+                except ImportError:
+                    from keras.models import load_model
 
                 # 使用 compile=False 避免舊版優化器相容問題
                 model = load_model(MODEL_PATH, compile=False)
-                model.compile(
-                    loss="categorical_crossentropy",
-                    optimizer="Adamax",
-                    metrics=["accuracy"],
-                )
                 _cnn_model = model
                 print("[*] 成功載入專用 TWSE CNN 驗證碼模型 (辨識率 98%+)")
             except Exception as e:

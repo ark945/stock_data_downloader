@@ -12,3 +12,4 @@ DrissionPage>=4.0.0
 google-api-python-client>=2.100.0
 google-auth>=2.23.0
 google-auth-httplib2>=0.1.1
+tensorflow-cpu>=2.15.0
