@@ -71,17 +71,29 @@ def merge_parquet_shards(output_dir: str = "output", trade_date: str = ""):
         try: os.remove(f)
         except OSError: pass
 
+    # 自動同步上傳至 Google Drive 目標資料夾
+    gdrive_link = None
+    try:
+        from gdrive_sync import upload_file_to_gdrive
+        gdrive_res = upload_file_to_gdrive(final_parquet)
+        if gdrive_res:
+            gdrive_link = gdrive_res.get("web_view_link")
+    except Exception as e:
+        print(f"[!] Google Drive 同步異常: {e}")
+
     # 推播通知
     tg_bot = os.environ.get("TELEGRAM_BOT_TOKEN")
     tg_chat = os.environ.get("TELEGRAM_CHAT_ID")
     if tg_bot and tg_chat:
+        gdrive_str = f"☁️ *Google Drive*：[點此立即檢視/下載]({gdrive_link})\n" if gdrive_link else ""
         tg_msg = (
             f"🚀 *【台股全市場分點日報表】4 矩陣分散極速採集完成！*\n\n"
             f"📅 *交易日期*：`{trade_date}`\n"
             f"📊 *涵蓋標的*：`{total_symbols:,}` 檔\n"
             f"📈 *明細筆數*：`{total_rows:,}` 筆\n"
             f"📦 *資料庫大小*：`{file_size_mb:.2f} MB` (Parquet 格式)\n"
-            f"⚡ *雲端分散式矩陣*：4 個獨立 IP 節點平行極速完成！\n\n"
+            f"⚡ *雲端分散式矩陣*：4 個獨立 IP 節點平行極速完成！\n"
+            f"{gdrive_str}\n"
             f"✅ 資料已自動歸檔並開放下載！"
         )
         send_telegram_alert(tg_bot, tg_chat, tg_msg)

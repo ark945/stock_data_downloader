@@ -117,6 +117,8 @@ jobs:
           PYTHONIOENCODING: "utf-8"
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GDRIVE_SERVICE_ACCOUNT_KEY: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_KEY }}
+          GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID || '1L6f9jQx9phz_ZoVfDmBQViEVnoDHh_0a' }}
           TARGET_DATE: ${{ github.event.inputs.target_date }}
         run: |
           mkdir -p output
