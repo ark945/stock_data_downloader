@@ -102,7 +102,12 @@ class TPEXBrokerCrawler:
             else:
                 lines = str(csv_file_or_text).splitlines()
 
-            # TPEX 格式通常前 2~3 行為標題
+            # TPEX 格式前 2 行包含：證券代碼,XXXX
+            # 嚴格校驗 CSV 內部代碼是否符合目標 stock_id，防止誤讀舊檔
+            content_header = "".join(lines[:5])
+            if "證券代碼" in content_header and stock_id not in content_header:
+                return None
+
             # 找到包含「序號」或「券商」的資料起點
             data_start = 0
             for i, line in enumerate(lines[:10]):
@@ -254,7 +259,12 @@ class TPEXBrokerCrawler:
             for idx, sym in enumerate(stock_codes, 1):
                 current_tab = tabs[(idx - 1) % 2]
                 try:
-                    # 1. 尋找輸入框並填入代號
+                    # 1. 抓取前清空暫存目錄，防止讀到舊檔
+                    for old_f in glob.glob(os.path.join(save_dir, "*")):
+                        try: os.remove(old_f)
+                        except OSError: pass
+
+                    # 2. 尋找輸入框並填入代號
                     stk_input = current_tab.ele("css:input.code", timeout=4) or current_tab.ele("@name=code", timeout=4)
                     if not stk_input:
                         current_tab.get(self.TPEX_URL, retry=2, timeout=15)
@@ -266,11 +276,11 @@ class TPEXBrokerCrawler:
 
                     stk_input.input(sym, clear=True, by_js=True)
 
-                    # 2. 點擊查詢按鈕
+                    # 3. 點擊查詢按鈕
                     q_btn = current_tab.ele("css:.btn-query", timeout=1) or current_tab.ele("text:查詢", timeout=1)
                     if q_btn:
                         q_btn.click(by_js=True)
-                        time.sleep(0.15)
+                        time.sleep(0.3)
 
                     # 檢查是否直接提示查無資料 (快速跳過)
                     if current_tab.ele("text:查無符合條件之資料", timeout=0.1) or current_tab.ele("text:查無資料", timeout=0.05):
@@ -278,7 +288,7 @@ class TPEXBrokerCrawler:
                         print(f"  [上櫃 {idx}/{total}] [無資料/跳過] {sym}")
                         continue
 
-                    # 3. 點擊下載按鈕
+                    # 4. 點擊下載按鈕
                     d_btn = current_tab.ele("text:下載 CSV (UTF-8)", timeout=1) or current_tab.ele("text:下載 CSV", timeout=1)
                     if d_btn:
                         d_btn.click(by_js=True)
