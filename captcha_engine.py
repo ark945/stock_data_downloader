@@ -18,7 +18,10 @@ warnings.filterwarnings("ignore")
 
 # 專用 CNN 支援字元集
 ALLOWED_CHARS = "ACDEFGHJKLNPQRTUVXYZ2346789"
-MODEL_PATH = os.path.abspath(
+
+# 優先尋找本目錄，其次尋找跨專案目錄
+LOCAL_MODEL = os.path.join(os.path.dirname(__file__), "twse_cnn_model.hdf5")
+REL_MODEL = os.path.abspath(
     os.path.join(
         os.path.dirname(__file__),
         "..",
@@ -27,6 +30,7 @@ MODEL_PATH = os.path.abspath(
         "twse_cnn_model.hdf5",
     )
 )
+MODEL_PATH = LOCAL_MODEL if os.path.exists(LOCAL_MODEL) else REL_MODEL
 
 _cnn_model = None
 _cnn_load_attempted = False
