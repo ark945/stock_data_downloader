@@ -201,6 +201,29 @@ class TPEXBrokerCrawler:
         except Exception:
             pass
 
+        # 策略 3: 官方證券編碼彙總表 (ISIN - 包含所有上櫃股票與 ETF，全年無休最穩定)
+        try:
+            from bs4 import BeautifulSoup
+            url = "https://isin.twse.com.tw/isin/C_public.jsp?strMode=4"
+            r = requests.get(url, headers=headers, timeout=10)
+            if r.status_code == 200:
+                r.encoding = "big5"
+                soup = BeautifulSoup(r.text, "html.parser")
+                stock_symbols = []
+                for row in soup.find_all("tr"):
+                    tds = row.find_all("td")
+                    if len(tds) > 0:
+                        txt = tds[0].text.strip()
+                        parts = txt.split()
+                        if len(parts) >= 2:
+                            code = parts[0]
+                            if re.match(r"^[0-9]{4}[A-Za-z]?$", code) or re.match(r"^00[0-9]{3}[A-Za-z0-9]?$", code):
+                                stock_symbols.append(code)
+                if len(stock_symbols) > 300:
+                    return sorted(list(dict.fromkeys(stock_symbols)))
+        except Exception:
+            pass
+
         # 預設常見上櫃指標股
         return ["6488", "6117", "3293", "8069", "5483", "3131", "6274", "3529", "8299", "6180"]
 

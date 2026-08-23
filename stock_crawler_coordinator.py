@@ -61,6 +61,28 @@ def format_duration(seconds: float) -> str:
     return "".join(parts)
 
 
+def get_latest_trading_date() -> str:
+    """
+    精確計算台股最新交易日：
+    - 週六 (5)：退回週五 (-1 天)
+    - 週日 (6)：退回週五 (-2 天)
+    - 週一 (0) 且未過 18:00 (盤前/盤中)：退回上週五 (-3 天)
+    - 週二至週五 (1~4) 且未過 18:00：退回前一天 (-1 天)
+    - 週一至週五 且已過 18:00 (盤後就緒)：當天 (-0 天)
+    """
+    now = get_taipei_now()
+    w = now.weekday()
+    if w == 5:
+        delta = 1
+    elif w == 6:
+        delta = 2
+    elif w == 0:
+        delta = 0 if now.hour >= 18 else 3
+    else:
+        delta = 0 if now.hour >= 18 else 1
+    return (now - pd.Timedelta(days=delta)).strftime("%Y-%m-%d")
+
+
 def run_full_market_crawler(
     trade_date: Optional[str] = None,
     markets: str = "all",
@@ -76,14 +98,7 @@ def run_full_market_crawler(
     start_str = start_dt.strftime("%Y-%m-%d %H:%M:%S")
 
     if not trade_date:
-        today = get_taipei_now()
-        if today.weekday() == 5:
-            delta = 1
-        elif today.weekday() == 6:
-            delta = 2
-        else:
-            delta = 0 if today.hour >= 18 else 1
-        trade_date = (today - pd.Timedelta(days=delta)).strftime("%Y-%m-%d")
+        trade_date = get_latest_trading_date()
 
     output_dir = output_dir or os.path.join(os.path.dirname(__file__), "output")
     os.makedirs(output_dir, exist_ok=True)
