@@ -326,18 +326,20 @@ class TWSEBrokerCrawler:
                 if df is not None and not df.empty:
                     all_dfs.append(df)
                     total_rows += len(df)
-                    status_str = f"[OK] {sym} ({len(df)} 筆)"
                 else:
                     failed_symbols.append(sym)
-                    status_str = f"[WARN/FAIL] {sym}"
 
                 if completed_count % 15 == 0 or completed_count == total_symbols:
                     elapsed = time.time() - start_time
                     speed = completed_count / elapsed if elapsed > 0 else 0
                     remaining = (total_symbols - completed_count) / speed if speed > 0 else 0
+                    pct = (completed_count / total_symbols) * 100
+                    success_cnt = len(all_dfs)
+                    miss_cnt = len(failed_symbols)
                     ts_now = datetime.now().strftime("%H:%M:%S")
                     print(
-                        f"[{ts_now}] [第1輪 {completed_count}/{total_symbols}] {status_str} | "
+                        f"[{ts_now}] [第1輪 進度 {completed_count}/{total_symbols} ({pct:.1f}%)] "
+                        f"成功: {success_cnt} 檔 | 無交易/待補: {miss_cnt} 檔 | "
                         f"累積: {total_rows:,} 筆 | 速度: {speed:.1f} 檔/s | "
                         f"剩餘約: {remaining/60:.1f} 分鐘"
                     )
