@@ -83,13 +83,16 @@ def run_full_market_crawler(
     os.makedirs(output_dir, exist_ok=True)
     name_map = load_stock_name_map()
 
+    market_suffix = f"_{markets.lower()}" if markets.lower() in ["twse", "tpex"] else ""
+    expected_final_name = f"api_absr1_{trade_date}_{trade_date}{market_suffix}.parquet"
+
     print("==================================================")
     log_msg("[*] 全市場台股分點買賣日報表統一調度控制器 (Coordinator) 啟動")
     log_msg(f"[*] 啟動時間: {start_str}")
     log_msg(f"[*] 執行交易日期: {trade_date}")
-    log_msg(f"[*] 目標市場範疇: {markets.upper()}")
+    log_msg(f"[*] 目標市場範疇 (Market): {markets.upper()} (產檔規格: {expected_final_name})")
     if num_shards > 1:
-        log_msg(f"[*] 分散式矩陣節點: 分片 {shard_id + 1} / {num_shards} (Shard ID: {shard_id})")
+        log_msg(f"[*] 雲端分片模式: 節點 {shard_id + 1} / {num_shards} (Shard ID: {shard_id})")
     log_msg(f"[*] TWSE 線程數: {workers} Workers | 上市最大補抓: {max_rounds} 輪")
     log_msg(f"[*] 成果輸出路徑: {output_dir}")
     print("==================================================")
@@ -103,7 +106,7 @@ def run_full_market_crawler(
 
     # 1. 抓取上市 (TWSE)
     if markets in ["all", "twse"]:
-        log_msg(">>> [階段 1/2] 啟動 TWSE 上市股票分點抓取 (最多 5 輪安全補抓)...")
+        log_msg(">>> [階段 1/2] 啟動 TWSE 上市股票分點抓取 (最多 6 輪安全補抓)...")
         twse_symbols = get_active_listed_symbols()
         if num_shards > 1:
             twse_symbols = [s for i, s in enumerate(twse_symbols) if i % num_shards == shard_id]
@@ -163,6 +166,7 @@ def run_full_market_crawler(
 
     log_msg(">>> [數據整合] 彙整分點資料中...")
     full_df = pd.concat(collected_dfs, ignore_index=True)
+    full_df.drop_duplicates(subset=["symbol", "trade_date", "broker_id"], inplace=True)
     full_df.sort_values(by=["symbol", "broker_id"], inplace=True)
     
     total_rows = len(full_df)
@@ -172,9 +176,9 @@ def run_full_market_crawler(
 
     # 輸出 Parquet 檔案
     if num_shards > 1:
-        parquet_filename = f"api_absr1_{trade_date}_{trade_date}_shard_{shard_id}.parquet"
+        parquet_filename = f"api_absr1_{trade_date}_{trade_date}{market_suffix}_shard_{shard_id}.parquet"
     else:
-        parquet_filename = f"api_absr1_{trade_date}_{trade_date}.parquet"
+        parquet_filename = f"api_absr1_{trade_date}_{trade_date}{market_suffix}.parquet"
         
     parquet_path = os.path.join(output_dir, parquet_filename)
     full_df.to_parquet(parquet_path, index=False)
@@ -183,7 +187,7 @@ def run_full_market_crawler(
 
     # 輸出 Excel 檔案
     if export_excel:
-        excel_filename = f"api_absr1_{trade_date}_{trade_date}.xlsx"
+        excel_filename = f"api_absr1_{trade_date}_{trade_date}{market_suffix}.xlsx"
         excel_path = os.path.join(output_dir, excel_filename)
         log_msg(f"[*] 正在輸出 Excel 檔案: {excel_path} (請稍候)...")
         full_df.to_excel(excel_path, engine="openpyxl", index=False)
@@ -196,14 +200,18 @@ def run_full_market_crawler(
     duration_str = format_duration(elapsed_total)
 
     print("==================================================")
-    log_msg("[OK] 全市場分點爬蟲全流程執行完畢！")
+    log_msg("[OK] 本節點爬蟲任務執行完畢！")
     log_msg(f"[*] 啟動時間: {start_str}")
     log_msg(f"[*] 結束時間: {end_str}")
     log_msg(f"[*] 總計耗時: {duration_str} (共 {elapsed_total:.1f} 秒)")
-    log_msg(f"[+] 總標的成功率: {unique_symbols}/{total_target_count} ({unique_symbols/total_target_count*100:.1f}%)")
+    log_msg(f"[+] 標的採集率: {unique_symbols}/{total_target_count} ({unique_symbols/total_target_count*100:.1f}%)")
     print("==================================================")
 
-    # 4. 發送 Telegram 推播與 Email 通知報告
+    # 4. 發送通知 (若為雲端分片模式則由最後聚合步驟統一推播，避免分片節點日誌混淆)
+    if num_shards > 1:
+        log_msg(f"[*] 雲端分片模式 (Shard {shard_id + 1}/{num_shards})：分片已生成，推播通知將於後續聚合步驟統一發送。")
+        return
+
     log_msg(">>> [通知推播] 檢查並發送執行成果與短缺股票日報...")
     from notify_engine import send_telegram_report, send_crawler_report_email
     

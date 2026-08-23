@@ -125,6 +125,7 @@ jobs:
           SENDER_PASSWORD: ${{ secrets.SENDER_PASSWORD || secrets.SMTP_PASSWORD }}
           RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL || secrets.NOTIFICATION_EMAIL }}
           TARGET_DATE: ${{ github.event.inputs.target_date }}
+          MARKET: ${{ github.event.inputs.market || 'all' }}
         run: |
           mkdir -p download_shards output
           find . -name "*_shard_*.parquet" -exec cp {} output/ \; 2>/dev/null || true
@@ -135,7 +136,7 @@ jobs:
             MERGE_SCRIPT="stock_data_downloader/merge_shards.py"
           fi
           
-          python "$MERGE_SCRIPT" "$TARGET_DATE"
+          python "$MERGE_SCRIPT" "$TARGET_DATE" "$MARKET"
           
           FINAL_FILE=$(find output -name "api_absr1_*.parquet" | head -n 1)
           if [ -n "$FINAL_FILE" ]; then

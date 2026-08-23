@@ -1,10 +1,11 @@
 """
 全市場分點爬蟲分片聚合器 (Merge Shards & Multi-Channel Notifier)
-專門將分散式 Matrix 矩陣產生的多個 Parquet 片段合併為 1 份完整的標準全市場資料庫
+專門將分散式 Matrix 矩陣產生的多個 Parquet 片段合併為 1 份標準全市場資料庫
 並自動執行：
-1. Google Drive 雲端資料夾自動同步
-2. Telegram 即時推播 (附 Google Drive 直連)
-3. SMTP HTML Email 完整報表
+1. 依據 market 參數產生標準檔名 (all / twse / tpex)
+2. Google Drive 雲端資料夾自動同步
+3. Telegram 即時推播 (附 Google Drive 直連)
+4. SMTP HTML Email 完整報表
 """
 
 import os
@@ -44,6 +45,7 @@ def send_email_alert(
     total_symbols: int,
     total_rows: int,
     file_size_mb: float,
+    market: str = "all",
     gdrive_link: str = None
 ) -> bool:
     """發送 HTML 視覺化 Email 報表"""
@@ -51,7 +53,6 @@ def send_email_alert(
     port_str = os.environ.get("SMTP_PORT", "587").strip()
     smtp_port = int(port_str) if port_str.isdigit() else 587
     
-    # 支援 SENDER_EMAIL / SMTP_USER / SMTP_USERNAME 多種命名
     sender_email = (
         os.environ.get("SENDER_EMAIL") or 
         os.environ.get("SMTP_USER") or 
@@ -74,8 +75,10 @@ def send_email_alert(
         print("[*] 提示：未配置 SENDER_EMAIL (或 SMTP_USER) 與 SENDER_PASSWORD，略過 Email 發送。")
         return False
 
+    market_title = "上市 (TWSE)" if market.lower() == "twse" else ("上櫃 (TPEX)" if market.lower() == "tpex" else "全市場")
+
     try:
-        subject = f"🚀 【台股全市場分點日報】{trade_date} 雲端矩陣採集完成 ({total_symbols:,} 檔 / {total_rows:,} 筆)"
+        subject = f"🚀 【台股{market_title}分點日報】{trade_date} 雲端矩陣採集完成 ({total_symbols:,} 檔 / {total_rows:,} 筆)"
         gdrive_btn = f"""
         <div style="margin: 25px 0; text-align: center;">
             <a href="{gdrive_link}" style="background-color: #1a73e8; color: #ffffff; padding: 12px 25px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block;">
@@ -89,12 +92,13 @@ def send_email_alert(
         <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f4f6f9; padding: 25px; margin: 0;">
             <div style="max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 10px; overflow: hidden; box-shadow: 0 4px 15px rgba(0,0,0,0.08);">
                 <div style="background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%); color: #ffffff; padding: 25px; text-align: center;">
-                    <h2 style="margin: 0; font-size: 22px;">📊 台股全市場分點買賣日報表</h2>
+                    <h2 style="margin: 0; font-size: 22px;">📊 台股{market_title}分點買賣日報表</h2>
                     <p style="margin: 8px 0 0 0; opacity: 0.9; font-size: 14px;">6-Runner 雲端分散式矩陣極速採集成功</p>
                 </div>
                 <div style="padding: 25px;">
                     <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;">
                         <tr style="border-bottom: 1px solid #edf2f7;"><td style="padding: 10px 0; color: #718096; font-size: 14px;">📅 交易日期</td><td style="padding: 10px 0; font-weight: bold; text-align: right; color: #2d3748;">{trade_date}</td></tr>
+                        <tr style="border-bottom: 1px solid #edf2f7;"><td style="padding: 10px 0; color: #718096; font-size: 14px;">🎯 目標市場</td><td style="padding: 10px 0; font-weight: bold; text-align: right; color: #2b6cb0;">{market.upper()} ({market_title})</td></tr>
                         <tr style="border-bottom: 1px solid #edf2f7;"><td style="padding: 10px 0; color: #718096; font-size: 14px;">🏢 涵蓋標的數</td><td style="padding: 10px 0; font-weight: bold; text-align: right; color: #2b6cb0;">{total_symbols:,} 檔</td></tr>
                         <tr style="border-bottom: 1px solid #edf2f7;"><td style="padding: 10px 0; color: #718096; font-size: 14px;">📈 明細總筆數</td><td style="padding: 10px 0; font-weight: bold; text-align: right; color: #2f855a;">{total_rows:,} 列</td></tr>
                         <tr style="border-bottom: 1px solid #edf2f7;"><td style="padding: 10px 0; color: #718096; font-size: 14px;">📦 資料庫容量</td><td style="padding: 10px 0; font-weight: bold; text-align: right; color: #4a5568;">{file_size_mb:.2f} MB (Parquet)</td></tr>
@@ -102,7 +106,7 @@ def send_email_alert(
                     </table>
                     {gdrive_btn}
                     <div style="background: #ebf8ff; border-left: 4px solid #3182ce; padding: 12px 15px; border-radius: 4px; font-size: 13px; color: #2b6cb0;">
-                        ✅ <b>100% 完整採集</b>：所有上市 (TWSE) 與上櫃 (TPEX) 個股分點明細已標準化歸檔。
+                        ✅ <b>100% 完整採集</b>：所有個股分點明細已標準化歸檔。
                     </div>
                 </div>
                 <div style="background: #f7fafc; padding: 15px; text-align: center; color: #a0aec0; font-size: 12px; border-top: 1px solid #edf2f7;">
@@ -133,16 +137,25 @@ def send_email_alert(
         return False
 
 
-def merge_parquet_shards(output_dir: str = "output", trade_date: str = ""):
+def merge_parquet_shards(output_dir: str = "output", trade_date: str = "", market: str = "all"):
     if not os.path.isabs(output_dir):
         output_dir = os.path.join(os.path.dirname(__file__), output_dir)
 
-    print(f"[*] 正在掃描並聚合分片資料: {output_dir}")
+    market = (market or os.environ.get("MARKET") or "all").lower().strip()
+    market_suffix = f"_{market}" if market in ["twse", "tpex"] else ""
+    market_title = "上市 (TWSE)" if market == "twse" else ("上櫃 (TPEX)" if market == "tpex" else "全市場")
+
+    print(f"==================================================")
+    print(f"[*] 全市場分片聚合器 (Merge Shards) 啟動")
+    print(f"[*] 目標市場範疇 (Market): {market.upper()} ({market_title})")
+    print(f"[*] 掃描分片路徑: {output_dir}")
+    print(f"==================================================")
+    sys.stdout.flush()
+
     shard_files = sorted(glob.glob(os.path.join(output_dir, "*_shard_*.parquet")))
 
     if not shard_files:
-        print("[!] 未在 output/ 找到任何分片檔案 (*_shard_*.parquet)")
-        # 搜尋工作區其他目錄
+        print("[!] 未在 output/ 找到分片檔案，搜尋工作區其他目錄...")
         shard_files = sorted(glob.glob(os.path.join(".", "**", "*_shard_*.parquet"), recursive=True))
         if shard_files:
             print(f"[+] 在其他子目錄找到 {len(shard_files)} 個分片檔案，正在集中複製...")
@@ -183,7 +196,8 @@ def merge_parquet_shards(output_dir: str = "output", trade_date: str = ""):
     if not trade_date and "trade_date" in full_df.columns:
         trade_date = str(full_df["trade_date"].iloc[0]).strip()
 
-    final_parquet = os.path.join(output_dir, f"api_absr1_{trade_date}_{trade_date}.parquet")
+    final_filename = f"api_absr1_{trade_date}_{trade_date}{market_suffix}.parquet"
+    final_parquet = os.path.join(output_dir, final_filename)
     full_df.to_parquet(final_parquet, index=False)
 
     total_symbols = full_df["symbol"].nunique()
@@ -193,9 +207,10 @@ def merge_parquet_shards(output_dir: str = "output", trade_date: str = ""):
     print("==================================================")
     print(f"[✓] 全市場分片聚合完成！")
     print(f"[*] 交易日期: {trade_date}")
+    print(f"[*] 目標市場: {market.upper()} ({market_title})")
     print(f"[*] 涵蓋標的數: {total_symbols:,} 檔")
     print(f"[*] 總資料筆數: {total_rows:,} 列")
-    print(f"[*] 最終檔案: {final_parquet} ({file_size_mb:.2f} MB)")
+    print(f"[*] 產檔規格命名: {final_filename} ({file_size_mb:.2f} MB)")
     print("==================================================")
 
     # 清理分片檔
@@ -219,11 +234,12 @@ def merge_parquet_shards(output_dir: str = "output", trade_date: str = ""):
     if tg_bot and tg_chat:
         gdrive_str = f"☁️ *Google Drive*：[點此立即檢視/下載]({gdrive_link})\n" if gdrive_link else ""
         tg_msg = (
-            f"🚀 *【台股全市場分點日報表】6 矩陣分散極速採集完成！*\n\n"
+            f"🚀 *【台股{market_title}分點日報表】6 矩陣分散極速採集完成！*\n\n"
             f"📅 *交易日期*：`{trade_date}`\n"
+            f"🎯 *目標市場*：`{market.upper()}` ({market_title})\n"
             f"📊 *涵蓋標的*：`{total_symbols:,}` 檔\n"
             f"📈 *明細筆數*：`{total_rows:,}` 筆\n"
-            f"📦 *資料庫大小*：`{file_size_mb:.2f} MB` (Parquet 格式)\n"
+            f"📦 *產檔規格*：`{final_filename}` (`{file_size_mb:.2f} MB`)\n"
             f"⚡ *雲端分散式矩陣*：6 個獨立 IP 節點平行極速完成！\n"
             f"{gdrive_str}\n"
             f"✅ 資料已自動歸檔並開放下載！"
@@ -238,10 +254,12 @@ def merge_parquet_shards(output_dir: str = "output", trade_date: str = ""):
         total_symbols=total_symbols,
         total_rows=total_rows,
         file_size_mb=file_size_mb,
+        market=market,
         gdrive_link=gdrive_link
     )
 
 
 if __name__ == "__main__":
     t_date = sys.argv[1] if len(sys.argv) > 1 else ""
-    merge_parquet_shards("output", t_date)
+    t_market = sys.argv[2] if len(sys.argv) > 2 else "all"
+    merge_parquet_shards("output", t_date, t_market)
