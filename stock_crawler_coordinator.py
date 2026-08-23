@@ -56,13 +56,15 @@ def format_duration(seconds: float) -> str:
 
 
 def run_full_market_crawler(
-    trade_date: str = None,
+    trade_date: Optional[str] = None,
     markets: str = "all",
-    workers: int = 2,
+    workers: int = 8,
     max_rounds: int = 5,
     output_dir: str = None,
     export_excel: bool = True,
-    receiver_email: Optional[str] = None
+    receiver_email: Optional[str] = None,
+    shard_id: int = 0,
+    num_shards: int = 1
 ):
     start_dt = datetime.now()
     start_str = start_dt.strftime("%Y-%m-%d %H:%M:%S")
@@ -86,6 +88,8 @@ def run_full_market_crawler(
     log_msg(f"[*] 啟動時間: {start_str}")
     log_msg(f"[*] 執行交易日期: {trade_date}")
     log_msg(f"[*] 目標市場範疇: {markets.upper()}")
+    if num_shards > 1:
+        log_msg(f"[*] 分散式矩陣節點: 分片 {shard_id + 1} / {num_shards} (Shard ID: {shard_id})")
     log_msg(f"[*] TWSE 線程數: {workers} Workers | 上市最大補抓: {max_rounds} 輪")
     log_msg(f"[*] 成果輸出路徑: {output_dir}")
     print("==================================================")
@@ -101,8 +105,10 @@ def run_full_market_crawler(
     if markets in ["all", "twse"]:
         log_msg(">>> [階段 1/2] 啟動 TWSE 上市股票分點抓取 (最多 5 輪安全補抓)...")
         twse_symbols = get_active_listed_symbols()
+        if num_shards > 1:
+            twse_symbols = [s for i, s in enumerate(twse_symbols) if i % num_shards == shard_id]
         total_target_count += len(twse_symbols)
-        log_msg(f"[*] 取得上市標的清單: {len(twse_symbols)} 檔")
+        log_msg(f"[*] 取得上市標的清單: {len(twse_symbols)} 檔 (分片 {shard_id + 1}/{num_shards})")
         
         twse_crawler = TWSEBrokerCrawler(delay_sec=0.4, max_retries=6)
         twse_dfs, twse_failed, r_exec = twse_crawler.crawl_stocks(
@@ -127,8 +133,10 @@ def run_full_market_crawler(
     if markets in ["all", "tpex"]:
         log_msg(">>> [階段 2/2] 啟動 TPEX 上櫃股票分點抓取 (單一純淨持久加速模式)...")
         tpex_symbols = TPEXBrokerCrawler.get_all_tpex_symbols()
+        if num_shards > 1:
+            tpex_symbols = [s for i, s in enumerate(tpex_symbols) if i % num_shards == shard_id]
         total_target_count += len(tpex_symbols)
-        log_msg(f"[*] 取得上櫃標的清單: {len(tpex_symbols)} 檔")
+        log_msg(f"[*] 取得上櫃標的清單: {len(tpex_symbols)} 檔 (分片 {shard_id + 1}/{num_shards})")
         
         tpex_crawler = TPEXBrokerCrawler()
         tpex_dfs, tpex_failed = tpex_crawler.crawl_all_stocks_session(
@@ -153,7 +161,7 @@ def run_full_market_crawler(
         log_msg("[!] 警告：本次執行未取得任何有效分點資料！")
         return
 
-    log_msg(">>> [數據整合] 彙整全市場分點資料中...")
+    log_msg(">>> [數據整合] 彙整分點資料中...")
     full_df = pd.concat(collected_dfs, ignore_index=True)
     full_df.sort_values(by=["symbol", "broker_id"], inplace=True)
     
@@ -241,6 +249,8 @@ def main():
     parser.add_argument("--no-excel", action="store_true", help="略過產出 Excel 檔")
     parser.add_argument("--output-dir", type=str, default=None, help="指定輸出目錄")
     parser.add_argument("--email", type=str, default=None, help="指定接收短缺日報的收件 Email")
+    parser.add_argument("--shard-id", type=int, default=0, help="分散式分片索引 (0-indexed)")
+    parser.add_argument("--num-shards", type=int, default=1, help="分散式總分片數 (預設 1)")
 
     args = parser.parse_args()
     run_full_market_crawler(
@@ -250,7 +260,9 @@ def main():
         max_rounds=args.max_rounds,
         output_dir=args.output_dir,
         export_excel=not args.no_excel,
-        receiver_email=args.email
+        receiver_email=args.email,
+        shard_id=args.shard_id,
+        num_shards=args.num_shards
     )
 
 
