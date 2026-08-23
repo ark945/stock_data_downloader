@@ -345,19 +345,30 @@ class TWSEBrokerCrawler:
             
             time.sleep(3)  # 輪次切換冷卻 3 秒
             
-            retry_crawler = TWSEBrokerCrawler(delay_sec=current_delay, max_retries=6 + rounds_executed)
-            still_failed = []
-            retry_success = 0
-            
+            # 載入名稱快取以利友善顯示
+            name_map = {}
+            map_p = os.path.join(os.path.dirname(__file__), "stock_name_map.json")
+            if os.path.exists(map_p):
+                try:
+                    import json
+                    with open(map_p, "r", encoding="utf-8") as f:
+                        name_map = json.load(f)
+                except Exception:
+                    pass
+
             for i, sym in enumerate(failed_symbols, 1):
+                sym_name = name_map.get(sym, "")
+                name_str = f"({sym_name})" if sym_name else ""
+                
                 sym, df = retry_crawler._crawl_single_worker(sym, trade_date)
                 if df is not None and not df.empty:
                     all_dfs.append(df)
                     total_rows += len(df)
                     retry_success += 1
-                    print(f"  [第{rounds_executed}輪 {i}/{retry_count}] [OK] {sym} -> 成功補回 {len(df)} 筆！")
+                    print(f"  [第{rounds_executed}輪 {i}/{retry_count}] [OK] {sym} {name_str} -> 成功補回 {len(df)} 筆！")
                 else:
                     still_failed.append(sym)
+                    print(f"  [第{rounds_executed}輪 {i}/{retry_count}] [未成功/無交易] {sym} {name_str} -> 查無分點或重試逾時")
                 sys.stdout.flush()
 
             print(f"[+] 第 {rounds_executed} 輪補抓完成！成功救回 {retry_success}/{retry_count} 檔 (剩餘未成功: {len(still_failed)} 檔)")
