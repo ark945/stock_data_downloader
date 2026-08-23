@@ -1,5 +1,9 @@
 name: 每日全市場券商分點爬蟲排程 (6-Runner 雲端分散極速版)
 
+env:
+  TZ: "Asia/Taipei"
+  PYTHONIOENCODING: "utf-8"
+
 on:
   schedule:
     # 每週一至週五 台灣時間 20:30 (UTC 12:30)

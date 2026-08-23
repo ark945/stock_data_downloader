@@ -12,12 +12,18 @@ import sys
 import time
 import re
 from typing import List, Optional, Tuple, Set
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
 from bs4 import BeautifulSoup
 import pandas as pd
 import numpy as np
+
+TAIPEI_TZ = timezone(timedelta(hours=8))
+
+def get_taipei_now() -> datetime:
+    """取得台灣時間 (UTC+8)"""
+    return datetime.now(timezone.utc).astimezone(TAIPEI_TZ)
 
 # 載入雙引擎驗證碼
 try:
@@ -103,7 +109,7 @@ class TWSEBrokerCrawler:
         }
 
     def _get_latest_trade_date(self) -> str:
-        today = datetime.now()
+        today = get_taipei_now()
         if today.weekday() == 5:
             delta = 1
         elif today.weekday() == 6:
@@ -338,7 +344,7 @@ class TWSEBrokerCrawler:
                     pct = (completed_count / total_symbols) * 100
                     success_cnt = len(all_dfs)
                     miss_cnt = len(failed_symbols)
-                    ts_now = datetime.now().strftime("%H:%M:%S")
+                    ts_now = get_taipei_now().strftime("%H:%M:%S")
                     print(
                         f"[{ts_now}] [第1輪 進度 {completed_count}/{total_symbols} ({pct:.1f}%)] "
                         f"成功: {success_cnt} 檔 | 無交易/待補: {miss_cnt} 檔 | "
@@ -357,7 +363,7 @@ class TWSEBrokerCrawler:
             retry_count = len(failed_symbols)
             current_delay = delay_schedule[min(rounds_executed - 2, len(delay_schedule) - 1)]
             
-            ts_round = datetime.now().strftime("%H:%M:%S")
+            ts_round = get_taipei_now().strftime("%H:%M:%S")
             print(f"\n" + "-"*50)
             print(f"[{ts_round}] [*] 啟動第 {rounds_executed}/{max_retry_rounds} 輪精準安全補抓佇列 (待補抓: {retry_count} 檔)")
             print(f"[{ts_round}] [*] 安全防護策略: 4-Workers 安全並行模式, 請求間隔 {current_delay}s, 預防 TWSE 頻率限制")

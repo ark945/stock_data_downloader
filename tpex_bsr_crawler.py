@@ -14,11 +14,17 @@ import tempfile
 import shutil
 import re
 from typing import List, Optional, Tuple
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 import requests
 import multiprocessing
 import pandas as pd
 import numpy as np
+
+TAIPEI_TZ = timezone(timedelta(hours=8))
+
+def get_taipei_now() -> datetime:
+    """取得台灣時間 (UTC+8)"""
+    return datetime.now(timezone.utc).astimezone(TAIPEI_TZ)
 
 def _mp_tpex_worker_task(
     worker_id: int,
@@ -437,7 +443,7 @@ class TPEXBrokerCrawler:
                                 mission2 = d_btn_retry.click.to_download(save_path=save_dir, rename=f"{sym}.csv")
                                 mission2.wait(show=False, timeout=3.5)
 
-                    ts_res = datetime.now().strftime("%H:%M:%S")
+                    ts_res = get_taipei_now().strftime("%H:%M:%S")
                     if os.path.exists(target_csv_file):
                         df = self.parse_tpex_csv_to_dataframe(target_csv_file, sym, trade_date)
                         if df is not None and not df.empty:
@@ -454,7 +460,7 @@ class TPEXBrokerCrawler:
                         print(f"[{ts_res}]   [上櫃 {idx}/{total}] [無資料/略過] {sym}")
 
                 except Exception as e:
-                    ts_err = datetime.now().strftime("%H:%M:%S")
+                    ts_err = get_taipei_now().strftime("%H:%M:%S")
                     failed_symbols.append(sym)
                     print(f"[{ts_err}]   [上櫃 {idx}/{total}] [異常] {sym} ({e})")
 

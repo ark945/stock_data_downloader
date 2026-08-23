@@ -15,9 +15,15 @@ import time
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 import pandas as pd
 import requests
+
+TAIPEI_TZ = timezone(timedelta(hours=8))
+
+def get_taipei_now() -> datetime:
+    """取得台灣時間 (UTC+8)"""
+    return datetime.now(timezone.utc).astimezone(TAIPEI_TZ)
 
 
 def send_telegram_alert(bot_token: str, chat_id: str, message: str) -> bool:
@@ -110,7 +116,7 @@ def send_email_alert(
                     </div>
                 </div>
                 <div style="background: #f7fafc; padding: 15px; text-align: center; color: #a0aec0; font-size: 12px; border-top: 1px solid #edf2f7;">
-                    此郵件由 GitHub Actions 全自動排程系統發送 • {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+                    此郵件由 GitHub Actions 全自動排程系統發送 • {get_taipei_now().strftime('%Y-%m-%d %H:%M:%S')}
                 </div>
             </div>
         </body>

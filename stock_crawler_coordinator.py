@@ -12,13 +12,19 @@ import sys
 import time
 import json
 import argparse
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Optional
 import pandas as pd
 
 from twse_bsr_crawler import TWSEBrokerCrawler, get_active_listed_symbols
 from tpex_bsr_crawler import TPEXBrokerCrawler
 from notify_engine import send_crawler_report_email
+
+TAIPEI_TZ = timezone(timedelta(hours=8))
+
+def get_taipei_now() -> datetime:
+    """取得台灣時間 (UTC+8)"""
+    return datetime.now(timezone.utc).astimezone(TAIPEI_TZ)
 
 
 def load_stock_name_map() -> Dict[str, str]:
@@ -34,8 +40,8 @@ def load_stock_name_map() -> Dict[str, str]:
 
 
 def log_msg(msg: str):
-    """輸出帶有精準時戳的日誌"""
-    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    """輸出帶有精準台灣時間時戳的日誌"""
+    ts = get_taipei_now().strftime("%Y-%m-%d %H:%M:%S")
     print(f"[{ts}] {msg}")
     sys.stdout.flush()
 
@@ -66,11 +72,11 @@ def run_full_market_crawler(
     shard_id: int = 0,
     num_shards: int = 1
 ):
-    start_dt = datetime.now()
+    start_dt = get_taipei_now()
     start_str = start_dt.strftime("%Y-%m-%d %H:%M:%S")
 
     if not trade_date:
-        today = datetime.now()
+        today = get_taipei_now()
         if today.weekday() == 5:
             delta = 1
         elif today.weekday() == 6:
@@ -194,7 +200,7 @@ def run_full_market_crawler(
         x_size_mb = os.path.getsize(excel_path) / (1024 * 1024)
         log_msg(f"[✓] Excel 檔案已儲存: {excel_path} ({x_size_mb:.2f} MB)")
 
-    end_dt = datetime.now()
+    end_dt = get_taipei_now()
     end_str = end_dt.strftime("%Y-%m-%d %H:%M:%S")
     elapsed_total = (end_dt - start_dt).total_seconds()
     duration_str = format_duration(elapsed_total)

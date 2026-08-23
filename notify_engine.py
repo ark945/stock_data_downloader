@@ -12,7 +12,13 @@ import requests
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from typing import List, Dict, Optional
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
+
+TAIPEI_TZ = timezone(timedelta(hours=8))
+
+def get_taipei_now() -> datetime:
+    """取得台灣時間 (UTC+8)"""
+    return datetime.now(timezone.utc).astimezone(TAIPEI_TZ)
 
 
 def send_telegram_report(
@@ -70,7 +76,7 @@ def send_telegram_report(
     else:
         msg_lines.append("\n🎉 *全市場 0 遺漏，完美收工！*")
 
-    msg_lines.append(f"\n🕒 _推播時間: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}_")
+    msg_lines.append(f"\n🕒 _推播時間: {get_taipei_now().strftime('%Y-%m-%d %H:%M:%S')}_")
     full_msg = "\n".join(msg_lines)
 
     url = f"https://api.telegram.org/bot{token}/sendMessage"
