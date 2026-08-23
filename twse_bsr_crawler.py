@@ -161,24 +161,22 @@ class TWSEBrokerCrawler:
                 r_post = session.post(self.MENU_URL, data=payload, timeout=8)
                 post_html = r_post.text
 
-                # 快速判斷：若是「查無此代碼」或「查無成交資料」，代表當日無交易，無需進行無效重試！
-                if "查無此代碼" in post_html or "查無符合條件之資料" in post_html or "查無資料" in post_html or "查無成交資料" in post_html:
+                # 正向精確判定：只要伺服器生成下載連結，代表查詢成功，立刻下載 CSV
+                if "HyperLink_DownloadCSV" in post_html or "bsContent.aspx" in post_html:
+                    time.sleep(0.35)
+                    r_content = session.get(self.CONTENT_URL, timeout=8)
+                    if r_content.status_code == 200 and len(r_content.content) > 100:
+                        raw_text = r_content.content.decode("utf-8-sig", errors="replace")
+                        if "券商買賣股票成交價量資訊" in raw_text or "股票代碼" in raw_text:
+                            return raw_text
+
+                # 若明確回傳查無代碼或查無符合資料，代表當日確實無交易
+                if "查無此代碼" in post_html or "查無符合條件之資料" in post_html or "查無此證券" in post_html:
                     return ""
 
-                # 若是驗證碼錯誤，才進行下一次換圖重試
-                if "驗證碼錯誤" in post_html or "驗證碼不符" in post_html:
-                    time.sleep(0.15)
-                    continue
-
-                # 等待伺服器端 Session 生成 CSV 檔案緩存 (避免 403 Forbidden)
-                time.sleep(0.35)
-
-                # 4. 下載 CSV 內容
-                r_content = session.get(self.CONTENT_URL, timeout=8)
-                if r_content.status_code == 200 and len(r_content.content) > 100:
-                    raw_text = r_content.content.decode("utf-8-sig", errors="replace")
-                    if "券商買賣股票成交價量資訊" in raw_text or "股票代碼" in raw_text:
-                        return raw_text
+                # 其餘狀況 (驗證碼錯誤或伺服器忙碌) 自動進入下一次換圖重試
+                time.sleep(0.2)
+                continue
 
             except Exception:
                 pass
