@@ -206,7 +206,7 @@ class TPEXBrokerCrawler:
         temp_user_data = tempfile.mkdtemp()
 
         co = ChromiumOptions()
-        co.auto_port()  # 自動分配可用 Debug 端口避免衝突
+        co.set_address("127.0.0.1:9222")
         co.set_argument("--no-sandbox")
         co.set_argument("--disable-gpu")
         co.set_argument("--disable-dev-shm-usage")
@@ -295,7 +295,9 @@ class TPEXBrokerCrawler:
                 sys.stdout.flush()
 
         except Exception as e:
+            import traceback
             print(f"[!] TPEX 瀏覽器批次引擎異常: {e}")
+            traceback.print_exc()
         finally:
             if page:
                 try:
