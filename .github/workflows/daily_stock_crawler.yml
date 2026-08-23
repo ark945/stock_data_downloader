@@ -72,9 +72,9 @@ jobs:
           fi
           
           if [ -n "$TARGET_DATE" ]; then
-            python "$TARGET_SCRIPT" --market "$MARKET" --date "$TARGET_DATE" --workers 2 --max-rounds 5 --no-excel
+            python "$TARGET_SCRIPT" --market "$MARKET" --date "$TARGET_DATE" --workers 4 --max-rounds 5 --no-excel
           else
-            python "$TARGET_SCRIPT" --market "$MARKET" --workers 2 --max-rounds 5 --no-excel
+            python "$TARGET_SCRIPT" --market "$MARKET" --workers 4 --max-rounds 5 --no-excel
           fi
 
           # 動態提取產出的 Parquet 檔名作為 Artifact 名稱 (如 api_absr1_2026-08-21_2026-08-21)

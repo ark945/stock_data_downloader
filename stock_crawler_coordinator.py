@@ -190,7 +190,12 @@ def main():
     parser = argparse.ArgumentParser(description="全市場台股分點買賣日報表爬蟲協調控制器 (含 5 輪補抓與 Email 短缺通知)")
     parser.add_argument("--date", type=str, default=None, help="目標交易日期 (格式 YYYY-MM-DD)")
     parser.add_argument("--market", "--markets", dest="market", type=str, choices=["all", "twse", "tpex"], default="all", help="執行市場 (all, twse, tpex)")
-    parser.add_argument("--workers", type=int, default=2, help="TWSE 並行 Worker 數 (建議 2~3)")
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=4,
+        help="TWSE 併發下載線程數 (預設: 4，兼顧極速與防封鎖)",
+    )
     parser.add_argument("--max-rounds", type=int, default=5, help="上市最大安全補抓輪數 (預設 5 輪)")
     parser.add_argument("--no-excel", action="store_true", help="略過產出 Excel 檔")
     parser.add_argument("--output-dir", type=str, default=None, help="指定輸出目錄")

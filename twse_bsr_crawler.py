@@ -87,7 +87,12 @@ class TWSEBrokerCrawler:
     MENU_URL = "https://bsr.twse.com.tw/bshtm/bsMenu.aspx"
     CONTENT_URL = "https://bsr.twse.com.tw/bshtm/bsContent.aspx"
 
-    def __init__(self, delay_sec: float = 0.3, max_retries: int = 5):
+    def __init__(self, delay_sec: float = 0.4, max_retries: int = 6):
+        """
+        初始化上市爬蟲實例
+        :param delay_sec: 每次請求之間的保護性延遲秒數 (預設 0.4s 安全平衡)
+        :param max_retries: 單一股票單輪最大重試次數
+        """
         self.delay_sec = delay_sec
         self.max_retries = max_retries
         self.headers = {
