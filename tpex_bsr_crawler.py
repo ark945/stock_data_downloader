@@ -267,17 +267,23 @@ class TPEXBrokerCrawler:
                     q_btn = page.ele("css:.btn-query", timeout=1) or page.ele("text:查詢", timeout=1)
                     if q_btn:
                         q_btn.click(by_js=True)
-                        time.sleep(0.5)
+                        time.sleep(0.3)
+
+                    # 檢查是否直接提示查無資料 (快速跳過)
+                    if page.ele("text:查無符合條件之資料", timeout=0.3) or page.ele("text:查無資料", timeout=0.1):
+                        failed_symbols.append(sym)
+                        print(f"  [上櫃 {idx}/{total}] [無資料/跳過] {sym} (當日無分點交易)")
+                        continue
 
                     # 4. 點擊下載按鈕
-                    d_btn = page.ele("text:下載 CSV (UTF-8)", timeout=2) or page.ele("text:下載 CSV", timeout=2)
+                    d_btn = page.ele("text:下載 CSV (UTF-8)", timeout=1) or page.ele("text:下載 CSV", timeout=1)
                     if d_btn:
                         d_btn.click(by_js=True)
                         
-                        # 5. 輪詢等待新 CSV 檔案完成下載 (最多 5 秒)
+                        # 5. 高頻輪詢等待 CSV 完成下載 (0.1s 間隔，最多等 2 秒)
                         found_csv = None
-                        for _ in range(16):
-                            time.sleep(0.3)
+                        for _ in range(20):
+                            time.sleep(0.1)
                             candidates = [
                                 os.path.join(save_dir, f) for f in os.listdir(save_dir)
                                 if not f.endswith(".crdownload") and not f.endswith(".tmp") and os.path.getsize(os.path.join(save_dir, f)) > 100
@@ -301,7 +307,7 @@ class TPEXBrokerCrawler:
                             except OSError: pass
                         else:
                             failed_symbols.append(sym)
-                            print(f"  [上櫃 {idx}/{total}] [查無交易/逾時] {sym}")
+                            print(f"  [上櫃 {idx}/{total}] [無資料/略過] {sym}")
                     else:
                         failed_symbols.append(sym)
                         print(f"  [上櫃 {idx}/{total}] [查無按鈕] {sym}")
