@@ -241,56 +241,70 @@ class TPEXBrokerCrawler:
 
             for idx, sym in enumerate(stock_codes, 1):
                 try:
-                    # 尋找輸入框
-                    stk_input = page.ele("@name=code", timeout=5)
+                    # 1. 清空下載目錄避免舊檔干擾
+                    for old_f in glob.glob(os.path.join(save_dir, "*")):
+                        try: os.remove(old_f)
+                        except OSError: pass
+
+                    # 2. 尋找輸入框並填入代號
+                    stk_input = page.ele("css:input.code", timeout=6) or page.ele("@name=code", timeout=6)
                     if not stk_input:
                         page.get(self.TPEX_URL, retry=2, timeout=15)
-                        stk_input = page.ele("@name=code", timeout=5)
+                        time.sleep(1)
+                        stk_input = page.ele("css:input.code", timeout=6) or page.ele("@name=code", timeout=6)
                         if not stk_input:
                             failed_symbols.append(sym)
                             continue
 
-                    stk_input.clear()
-                    stk_input.input(sym)
-                    time.sleep(0.3)
+                    stk_input.input(sym, clear=True, by_js=True)
+                    time.sleep(0.2)
 
-                    # 點擊下載按鈕
-                    download_btn = page.ele("text:下載 CSV (UTF-8)", timeout=2) or page.ele("text:下載 CSV", timeout=2)
-                    if not download_btn:
-                        # 嘗試點查詢後再下載
-                        query_btn = page.ele("@id=submitButton", timeout=1) or page.ele("text:查詢", timeout=1)
-                        if query_btn:
-                            query_btn.click()
-                            time.sleep(1)
-                            download_btn = page.ele("text:下載 CSV (UTF-8)", timeout=2) or page.ele("text:下載 CSV", timeout=2)
+                    # 3. 點擊查詢按鈕
+                    q_btn = page.ele("css:.btn-query", timeout=1) or page.ele("text:查詢", timeout=1)
+                    if q_btn:
+                        q_btn.click(by_js=True)
+                        time.sleep(0.5)
 
-                    if download_btn:
-                        download_btn.click()
-                        time.sleep(1.2)  # 等待下載完成
+                    # 4. 點擊下載按鈕
+                    d_btn = page.ele("text:下載 CSV (UTF-8)", timeout=2) or page.ele("text:下載 CSV", timeout=2)
+                    if d_btn:
+                        d_btn.click(by_js=True)
+                        
+                        # 5. 輪詢等待新 CSV 檔案完成下載 (最多 5 秒)
+                        found_csv = None
+                        for _ in range(16):
+                            time.sleep(0.3)
+                            candidates = [
+                                os.path.join(save_dir, f) for f in os.listdir(save_dir)
+                                if not f.endswith(".crdownload") and not f.endswith(".tmp") and os.path.getsize(os.path.join(save_dir, f)) > 100
+                            ]
+                            if candidates:
+                                found_csv = candidates[0]
+                                break
 
-                        csv_path = self._find_downloaded_csv(sym, save_dir)
-                        if csv_path:
-                            df = self.parse_tpex_csv_to_dataframe(csv_path, sym, trade_date)
+                        if found_csv and os.path.exists(found_csv):
+                            df = self.parse_tpex_csv_to_dataframe(found_csv, sym, trade_date)
                             if df is not None and not df.empty:
                                 collected_dfs.append(df)
-                                if idx % 20 == 0 or idx == total:
-                                    elapsed = time.time() - start_t
-                                    speed = idx / elapsed if elapsed > 0 else 0
-                                    remain = (total - idx) / speed if speed > 0 else 0
-                                    print(f"  [上櫃 {idx}/{total}] [OK] {sym} ({len(df)} 筆) | 速度: {speed:.1f} 檔/s | 剩餘約: {remain/60:.1f} 分鐘")
+                                elapsed = time.time() - start_t
+                                speed = idx / elapsed if elapsed > 0 else 0
+                                remain = (total - idx) / speed if speed > 0 else 0
+                                print(f"  [上櫃 {idx}/{total}] [OK] {sym} ({len(df)} 筆) | 速度: {speed:.1f} 檔/s | 剩餘約: {remain/60:.1f} 分鐘")
                             else:
                                 failed_symbols.append(sym)
-                            try:
-                                os.remove(csv_path)
-                            except OSError:
-                                pass
+                                print(f"  [上櫃 {idx}/{total}] [無資料/略過] {sym} -> 空檔案")
+                            try: os.remove(found_csv)
+                            except OSError: pass
                         else:
                             failed_symbols.append(sym)
+                            print(f"  [上櫃 {idx}/{total}] [查無交易/逾時] {sym}")
                     else:
                         failed_symbols.append(sym)
+                        print(f"  [上櫃 {idx}/{total}] [查無按鈕] {sym}")
 
                 except Exception as e:
                     failed_symbols.append(sym)
+                    print(f"  [上櫃 {idx}/{total}] [異常] {sym} ({e})")
 
                 sys.stdout.flush()
 
