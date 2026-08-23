@@ -373,19 +373,37 @@ class TPEXBrokerCrawler:
             except Exception:
                 pass
             page.get(self.TPEX_URL, retry=3, timeout=25)
-            time.sleep(2.5)
+            consecutive_misses = 0
 
             for idx, sym in enumerate(stock_codes, 1):
                 try:
+                    # 週期性主動健康刷新 (每 30 檔重整一次，保持 DOM 與 Turnstile Token 最佳狀態)
+                    if idx > 1 and idx % 30 == 0:
+                        page.get(self.TPEX_URL, retry=3, timeout=20)
+                        time.sleep(2.0)
+                        stk_input = page.ele("css:input.code", timeout=4) or page.ele("@name=code", timeout=4)
+                        q_btn = page.ele("css:.btn-query", timeout=1) or page.ele("text:查詢", timeout=1)
+                        d_btn = page.ele("text:下載 CSV (UTF-8)", timeout=1) or page.ele("text:下載 CSV", timeout=1)
+
+                    # 若連續 2 檔未取得資料，觸發緊急自癒刷新
+                    if consecutive_misses >= 2:
+                        ts_heal = datetime.now().strftime("%H:%M:%S")
+                        print(f"[{ts_heal}] [*] 偵測到會話狀態異常，觸發自動自癒刷新頁面...")
+                        page.get(self.TPEX_URL, retry=3, timeout=20)
+                        time.sleep(2.5)
+                        consecutive_misses = 0
+                        stk_input = None
+
                     # 1. 尋找輸入框並填入代號
-                    stk_input = page.ele("css:input.code", timeout=4) or page.ele("@name=code", timeout=4)
                     if not stk_input:
-                        page.get(self.TPEX_URL, retry=2, timeout=15)
-                        time.sleep(1.5)
                         stk_input = page.ele("css:input.code", timeout=4) or page.ele("@name=code", timeout=4)
                         if not stk_input:
-                            failed_symbols.append(sym)
-                            continue
+                            page.get(self.TPEX_URL, retry=2, timeout=15)
+                            time.sleep(2.0)
+                            stk_input = page.ele("css:input.code", timeout=4) or page.ele("@name=code", timeout=4)
+                            if not stk_input:
+                                failed_symbols.append(sym)
+                                continue
 
                     target_csv_file = os.path.join(save_dir, f"{sym}.csv")
                     if os.path.exists(target_csv_file):
@@ -398,36 +416,41 @@ class TPEXBrokerCrawler:
                     q_btn = page.ele("css:.btn-query", timeout=1) or page.ele("text:查詢", timeout=1)
                     if q_btn:
                         q_btn.click(by_js=True)
-                        time.sleep(0.2)
+                        time.sleep(0.3)
 
-                    # 3. 點擊下載按鈕並使用官方原生 to_download 等待機制 (關閉進度條洗版)
+                    # 3. 點擊下載按鈕並使用官方原生 to_download 等待機制
                     d_btn = page.ele("text:下載 CSV (UTF-8)", timeout=1) or page.ele("text:下載 CSV", timeout=1)
                     if d_btn:
                         mission = d_btn.click.to_download(save_path=save_dir, rename=f"{sym}.csv")
-                        mission.wait(show=False, timeout=3.0)
+                        mission.wait(show=False, timeout=3.5)
 
                         ts_res = datetime.now().strftime("%H:%M:%S")
                         if os.path.exists(target_csv_file):
                             df = self.parse_tpex_csv_to_dataframe(target_csv_file, sym, trade_date)
                             if df is not None and not df.empty:
                                 collected_dfs.append(df)
+                                consecutive_misses = 0
                                 elapsed = time.time() - start_t
                                 speed = idx / elapsed if elapsed > 0 else 0
                                 remain = (total - idx) / speed if speed > 0 else 0
                                 print(f"[{ts_res}]   [上櫃 {idx}/{total}] [OK] {sym} ({len(df)} 筆) | 速度: {speed:.2f} 檔/s | 剩餘約: {remain/60:.1f} 分鐘")
                             else:
+                                consecutive_misses += 1
                                 failed_symbols.append(sym)
                                 print(f"[{ts_res}]   [上櫃 {idx}/{total}] [無資料/略過] {sym}")
                         else:
+                            consecutive_misses += 1
                             failed_symbols.append(sym)
                             print(f"[{ts_res}]   [上櫃 {idx}/{total}] [無資料/略過] {sym}")
                     else:
                         ts_btn = datetime.now().strftime("%H:%M:%S")
+                        consecutive_misses += 1
                         failed_symbols.append(sym)
                         print(f"[{ts_btn}]   [上櫃 {idx}/{total}] [查無按鈕] {sym}")
 
                 except Exception as e:
                     ts_err = datetime.now().strftime("%H:%M:%S")
+                    consecutive_misses += 1
                     failed_symbols.append(sym)
                     print(f"[{ts_err}]   [上櫃 {idx}/{total}] [異常] {sym} ({e})")
 
