@@ -414,13 +414,10 @@ class TPEXBrokerCrawler:
             page.get(self.TPEX_URL, retry=3, timeout=25)
             time.sleep(2.5)
 
+            consecutive_misses = 0
+
             for idx, sym in enumerate(stock_codes, 1):
                 try:
-                    # 週期性主動健康刷新 (縮短為每 20 檔重整一次，永遠走在 5 分鐘 Turnstile Token 過期之前)
-                    if idx > 1 and idx % 20 == 0:
-                        page.get(self.TPEX_URL, retry=3, timeout=20)
-                        time.sleep(2.0)
-
                     # 清空暫存目錄下的所有舊 CSV
                     for old_f in glob.glob(os.path.join(save_dir, "*.csv")):
                         try: os.remove(old_f)
@@ -430,8 +427,8 @@ class TPEXBrokerCrawler:
                     stk_input = page.ele("css:input.code", timeout=4) or page.ele("@name=code", timeout=4)
                     if not stk_input:
                         page.get(self.TPEX_URL, retry=2, timeout=15)
-                        time.sleep(2.0)
-                        stk_input = page.ele("css:input.code", timeout=4) or page.ele("@name=code", timeout=4)
+                        time.sleep(3.5)
+                        stk_input = page.ele("css:input.code", timeout=5) or page.ele("@name=code", timeout=5)
                         if not stk_input:
                             failed_symbols.append(sym)
                             continue
@@ -455,36 +452,22 @@ class TPEXBrokerCrawler:
                             try: d_btn.click(by_js=True)
                             except Exception: pass
                         
-                        # 輪詢查找最新產出的 CSV (最多等 3.5 秒)
-                        for _ in range(7):
+                        # 輪詢查找最新產出的 CSV (最多等 3 秒)
+                        for _ in range(6):
                             time.sleep(0.5)
                             found_csv = self._find_downloaded_csv(sym, save_dir)
                             if found_csv:
                                 break
 
-                    # 若未找到檔案 (代表 Token 可能過期或頁面卡住)，啟動【即時刷新重認證補抓】
+                    # 若連續累積多次找不到 (代表 Session 異常)，執行深度重載並等待驗證完成
                     if not found_csv:
-                        page.get(self.TPEX_URL, retry=2, timeout=15)
-                        time.sleep(2.0)
-                        stk_input = page.ele("css:input.code", timeout=4) or page.ele("@name=code", timeout=4)
-                        if stk_input:
-                            stk_input.input(sym, clear=True, by_js=True)
-                            q_btn = page.ele("css:.btn-query", timeout=2) or page.ele("text:查詢", timeout=2)
-                            if q_btn:
-                                q_btn.click(by_js=True)
-                                time.sleep(0.5)
-                            d_btn_retry = page.ele("text:下載 CSV", timeout=3) or page.ele("text:下載 CSV (UTF-8)", timeout=3)
-                            if d_btn_retry:
-                                try:
-                                    d_btn_retry.click.to_download(save_path=save_dir, rename=f"{sym}.csv")
-                                except Exception:
-                                    try: d_btn_retry.click(by_js=True)
-                                    except Exception: pass
-                                for _ in range(7):
-                                    time.sleep(0.5)
-                                    found_csv = self._find_downloaded_csv(sym, save_dir)
-                                    if found_csv:
-                                        break
+                        consecutive_misses += 1
+                        if consecutive_misses >= 3:
+                            page.get(self.TPEX_URL, retry=2, timeout=20)
+                            time.sleep(4.0)
+                            consecutive_misses = 0
+                    else:
+                        consecutive_misses = 0
 
                     ts_res = get_taipei_now().strftime("%H:%M:%S")
                     if found_csv and os.path.exists(found_csv):
