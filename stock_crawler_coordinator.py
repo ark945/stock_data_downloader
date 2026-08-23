@@ -125,7 +125,7 @@ def run_full_market_crawler(
 
     # 2. 抓取上櫃 (TPEX)
     if markets in ["all", "tpex"]:
-        log_msg(">>> [階段 2/2] 啟動 TPEX 上櫃股票分點抓取 (三分頁持久加速模式)...")
+        log_msg(">>> [階段 2/2] 啟動 TPEX 上櫃股票分點抓取 (單一持久加速模式)...")
         tpex_symbols = TPEXBrokerCrawler.get_all_tpex_symbols()
         total_target_count += len(tpex_symbols)
         log_msg(f"[*] 取得上櫃標的清單: {len(tpex_symbols)} 檔")

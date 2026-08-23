@@ -242,25 +242,13 @@ class TPEXBrokerCrawler:
         start_t = time.time()
 
         try:
-            print(f"[*] 正在啟動 TPEX 三分頁持久化加速引擎 (待抓取: {total} 檔)...")
+            print(f"[*] 正在啟動 TPEX 單一持久化極速引擎 (待抓取: {total} 檔)...")
             page = ChromiumPage(addr_or_opts=co)
             page.set.download_path(save_dir)
-            
-            tab1 = page.get_tab()
-            tab1.get(self.TPEX_URL, retry=3, timeout=25)
-            
-            # 開啟第 2 與第 3 個平行分頁
-            tab2 = page.new_tab()
-            tab2.get(self.TPEX_URL, retry=3, timeout=25)
-            
-            tab3 = page.new_tab()
-            tab3.get(self.TPEX_URL, retry=3, timeout=25)
-            time.sleep(1.5)
-            
-            tabs = [tab1, tab2, tab3]
+            page.get(self.TPEX_URL, retry=3, timeout=25)
+            time.sleep(2)
 
             for idx, sym in enumerate(stock_codes, 1):
-                current_tab = tabs[(idx - 1) % 3]
                 try:
                     # 1. 抓取前清空暫存目錄，防止讀到舊檔
                     for old_f in glob.glob(os.path.join(save_dir, "*")):
@@ -268,11 +256,11 @@ class TPEXBrokerCrawler:
                         except OSError: pass
 
                     # 2. 尋找輸入框並填入代號
-                    stk_input = current_tab.ele("css:input.code", timeout=4) or current_tab.ele("@name=code", timeout=4)
+                    stk_input = page.ele("css:input.code", timeout=4) or page.ele("@name=code", timeout=4)
                     if not stk_input:
-                        current_tab.get(self.TPEX_URL, retry=2, timeout=15)
+                        page.get(self.TPEX_URL, retry=2, timeout=15)
                         time.sleep(1)
-                        stk_input = current_tab.ele("css:input.code", timeout=4) or current_tab.ele("@name=code", timeout=4)
+                        stk_input = page.ele("css:input.code", timeout=4) or page.ele("@name=code", timeout=4)
                         if not stk_input:
                             failed_symbols.append(sym)
                             continue
@@ -280,17 +268,17 @@ class TPEXBrokerCrawler:
                     stk_input.input(sym, clear=True, by_js=True)
 
                     # 3. 點擊查詢按鈕
-                    q_btn = current_tab.ele("css:.btn-query", timeout=1) or current_tab.ele("text:查詢", timeout=1)
+                    q_btn = page.ele("css:.btn-query", timeout=1) or page.ele("text:查詢", timeout=1)
                     if q_btn:
                         q_btn.click(by_js=True)
                         time.sleep(0.3)
 
                     # 4. 點擊下載按鈕
-                    d_btn = current_tab.ele("text:下載 CSV (UTF-8)", timeout=1) or current_tab.ele("text:下載 CSV", timeout=1)
+                    d_btn = page.ele("text:下載 CSV (UTF-8)", timeout=1) or page.ele("text:下載 CSV", timeout=1)
                     if d_btn:
                         d_btn.click(by_js=True)
                         
-                        # 4. 高頻極速輪詢等待 CSV 檔案寫入 (0.1s 間隔，最多等 2.5 秒)
+                        # 4. 輪詢等待 CSV 檔案寫入 (0.1s 間隔，最多等 2.5 秒)
                         found_csv = None
                         for _ in range(25):
                             time.sleep(0.1)
