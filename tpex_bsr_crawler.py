@@ -285,22 +285,15 @@ class TPEXBrokerCrawler:
                         q_btn.click(by_js=True)
                         time.sleep(0.3)
 
-                    # 檢查是否直接提示查無資料 (快速跳過)
-                    ts_now = datetime.now().strftime("%H:%M:%S")
-                    if current_tab.ele("text:查無符合條件之資料", timeout=0.1) or current_tab.ele("text:查無資料", timeout=0.05):
-                        failed_symbols.append(sym)
-                        print(f"[{ts_now}]   [上櫃 {idx}/{total}] [無資料/跳過] {sym}")
-                        continue
-
                     # 4. 點擊下載按鈕
                     d_btn = current_tab.ele("text:下載 CSV (UTF-8)", timeout=1) or current_tab.ele("text:下載 CSV", timeout=1)
                     if d_btn:
                         d_btn.click(by_js=True)
                         
-                        # 4. 高頻極速輪詢 (0.05s 間隔，最多等 1.5 秒)
+                        # 4. 高頻極速輪詢等待 CSV 檔案寫入 (0.1s 間隔，最多等 2.5 秒)
                         found_csv = None
                         for _ in range(25):
-                            time.sleep(0.05)
+                            time.sleep(0.1)
                             candidates = [
                                 os.path.join(save_dir, f) for f in os.listdir(save_dir)
                                 if not f.endswith(".crdownload") and not f.endswith(".tmp") and os.path.getsize(os.path.join(save_dir, f)) > 100
