@@ -53,9 +53,9 @@ def run_notification_test():
 
     # 2. 測試 Email 寄送
     print("\n[*] [2/2] 正在測試 Email SMTP 發信...")
-    smtp_user = os.getenv("SMTP_USER", "")
-    smtp_pass = os.getenv("SMTP_PASSWORD", "")
-    receiver = os.getenv("RECEIVER_EMAIL", "")
+    smtp_user = (os.getenv("SMTP_USER") or "").strip()
+    smtp_pass = (os.getenv("SMTP_PASSWORD") or "").strip()
+    receiver = (os.getenv("RECEIVER_EMAIL") or "").strip()
 
     if smtp_user and smtp_pass:
         print(f"[*] 偵測到 SMTP 帳號: {smtp_user}, 收件者: {receiver or smtp_user}")

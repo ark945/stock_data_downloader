@@ -93,11 +93,12 @@ def send_crawler_report_email(
     receiver_email: Optional[str] = None,
 ) -> bool:
     """發送爬蟲執行成果與短缺股票明細 Email (若有設定 SMTP)"""
-    smtp_server = os.getenv("SMTP_SERVER", "smtp.gmail.com")
-    smtp_port = int(os.getenv("SMTP_PORT", "587"))
-    smtp_user = os.getenv("SMTP_USER", "")
-    smtp_password = os.getenv("SMTP_PASSWORD", "")
-    to_email = receiver_email or os.getenv("RECEIVER_EMAIL", smtp_user)
+    smtp_server = os.getenv("SMTP_SERVER", "smtp.gmail.com") or "smtp.gmail.com"
+    port_str = (os.getenv("SMTP_PORT") or "").strip()
+    smtp_port = int(port_str) if port_str.isdigit() else 587
+    smtp_user = (os.getenv("SMTP_USER") or "").strip()
+    smtp_password = (os.getenv("SMTP_PASSWORD") or "").strip()
+    to_email = (receiver_email or os.getenv("RECEIVER_EMAIL") or smtp_user).strip()
 
     if not smtp_user or not smtp_password or not to_email:
         return False
