@@ -303,8 +303,6 @@ class TPEXBrokerCrawler:
                             else:
                                 failed_symbols.append(sym)
                                 print(f"  [上櫃 {idx}/{total}] [無資料/略過] {sym} -> 空檔案")
-                            try: os.remove(found_csv)
-                            except OSError: pass
                         else:
                             failed_symbols.append(sym)
                             print(f"  [上櫃 {idx}/{total}] [無資料/略過] {sym}")
