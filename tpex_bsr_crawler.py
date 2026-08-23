@@ -216,14 +216,24 @@ class TPEXBrokerCrawler:
 
     def parse_tpex_csv_to_dataframe(self, csv_file_or_text, stock_id: str, trade_date: str) -> Optional[pd.DataFrame]:
         """
-        解析 TPEX 原始 CSV 並聚合為標準 13 欄位 DataFrame
+        解析 TPEX 原始 CSV 並聚合為標準 13 欄位 DataFrame (支援 CP950/Big5/UTF-8 自適應解碼)
         """
         try:
+            lines = []
             if os.path.exists(str(csv_file_or_text)):
-                with open(csv_file_or_text, "r", encoding="utf-8-sig", errors="replace") as f:
-                    lines = f.readlines()
+                for enc in ["cp950", "big5", "utf-8-sig", "utf-8"]:
+                    try:
+                        with open(csv_file_or_text, "r", encoding=enc) as f:
+                            lines = f.readlines()
+                        if lines and len(lines) > 2:
+                            break
+                    except Exception:
+                        continue
             else:
                 lines = str(csv_file_or_text).splitlines()
+
+            if not lines:
+                return None
 
             # TPEX 格式前 2 行包含：證券代號,XXXX 或 證券代碼,XXXX
             # 嚴格校驗 CSV 內部代碼是否符合目標 stock_id，防止誤讀舊檔
