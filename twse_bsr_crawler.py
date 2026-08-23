@@ -380,8 +380,8 @@ class TWSEBrokerCrawler:
             failed_symbols = still_failed
 
         if not failed_symbols:
-            print(f"\n[🎉 完美收工] 全市場上市標的已 100% 完整抓取！(總計執行 {rounds_executed} 輪)")
+            print(f"\n[+] 全市場標的 100% 抓取達成！(共執行 {rounds_executed} 輪)")
         else:
-            print(f"\n[⚠️ 達到第 {rounds_executed} 輪上限] 最終剩餘 {len(failed_symbols)} 檔未成功產出，已記錄清單並準備發送通知。")
+            print(f"\n[!] 達到最大補抓輪數 ({max_retry_rounds} 輪)，剩餘未產出標的: {len(failed_symbols)} 檔")
 
         return all_dfs, failed_symbols, rounds_executed
