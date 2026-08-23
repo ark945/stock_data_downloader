@@ -171,7 +171,11 @@ def run_full_market_crawler(
     log_msg(f"[+] 總資料筆數: {total_rows:,} 列")
 
     # 輸出 Parquet 檔案
-    parquet_filename = f"api_absr1_{trade_date}_{trade_date}.parquet"
+    if num_shards > 1:
+        parquet_filename = f"api_absr1_{trade_date}_{trade_date}_shard_{shard_id}.parquet"
+    else:
+        parquet_filename = f"api_absr1_{trade_date}_{trade_date}_1.parquet"
+        
     parquet_path = os.path.join(output_dir, parquet_filename)
     full_df.to_parquet(parquet_path, index=False)
     p_size_mb = os.path.getsize(parquet_path) / (1024 * 1024)
