@@ -25,7 +25,10 @@ def send_telegram_report(
     elapsed_seconds: float,
     rounds_executed: int,
     bot_token: Optional[str] = None,
-    chat_id: Optional[str] = None
+    chat_id: Optional[str] = None,
+    start_time_str: Optional[str] = None,
+    end_time_str: Optional[str] = None,
+    duration_str: Optional[str] = None
 ) -> bool:
     """發送 Telegram 即時推播報表"""
     token = bot_token or os.getenv("TELEGRAM_BOT_TOKEN", "")
@@ -39,6 +42,7 @@ def send_telegram_report(
     completion_rate = ((success_count + no_trade_count) / total_target * 100) if total_target > 0 else 0
     status_icon = "✅" if failed_count == 0 else ("⚠️" if failed_count < 10 else "❌")
     status_text = "全市場 100% 完整產出" if failed_count == 0 else f"存在 {failed_count} 檔短缺"
+    duration_display = duration_str or f"{elapsed_seconds/60:.1f} 分鐘"
 
     msg_lines = [
         f"{status_icon} *【台股全市場分點爬蟲日報】*",
@@ -46,8 +50,16 @@ def send_telegram_report(
         f"🎯 *達成率*: `{completion_rate:.1f}%` ({status_text})",
         f"📊 *總資料筆數*: `{total_rows:,}` 列",
         f"📈 *成功/無交易*: `{success_count}` 檔 / `{no_trade_count}` 檔",
-        f"⏱️ *執行耗時*: `{elapsed_seconds/60:.1f}` 分鐘 (共執行 `{rounds_executed}/5` 輪)",
     ]
+
+    if start_time_str and end_time_str:
+        msg_lines.extend([
+            f"🕒 *開始時間*: `{start_time_str}`",
+            f"🏁 *結束時間*: `{end_time_str}`",
+            f"⏱️ *總計耗時*: `{duration_display}` (共 `{rounds_executed}/5` 輪)",
+        ])
+    else:
+        msg_lines.append(f"⏱️ *執行耗時*: `{duration_display}` (共 `{rounds_executed}/5` 輪)")
 
     if failed_count > 0:
         msg_lines.append(f"\n⚠️ *最終短缺股票清單 (共 {failed_count} 檔)*:")
@@ -91,6 +103,9 @@ def send_crawler_report_email(
     elapsed_seconds: float,
     rounds_executed: int,
     receiver_email: Optional[str] = None,
+    start_time_str: Optional[str] = None,
+    end_time_str: Optional[str] = None,
+    duration_str: Optional[str] = None
 ) -> bool:
     """發送爬蟲執行成果與短缺股票明細 Email (若有設定 SMTP)"""
     smtp_server = os.getenv("SMTP_SERVER", "smtp.gmail.com") or "smtp.gmail.com"
@@ -107,6 +122,7 @@ def send_crawler_report_email(
     completion_rate = ((success_count + no_trade_count) / total_target * 100) if total_target > 0 else 0
     status_emoji = "✅" if failed_count == 0 else ("⚠️" if failed_count < 10 else "❌")
     status_text = "全市場 100% 完整產出" if failed_count == 0 else f"存在 {failed_count} 檔短缺標的"
+    duration_display = duration_str or f"{elapsed_seconds/60:.1f} 分鐘"
 
     subject = f"{status_emoji} 【台股分點爬蟲日報】{trade_date} 執行成果 — {status_text}"
 

@@ -33,6 +33,28 @@ def load_stock_name_map() -> Dict[str, str]:
     return {}
 
 
+def log_msg(msg: str):
+    """輸出帶有精準時戳的日誌"""
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[{ts}] {msg}")
+    sys.stdout.flush()
+
+
+def format_duration(seconds: float) -> str:
+    """將秒數格式化為 幾時幾分幾秒"""
+    s = int(seconds)
+    hours = s // 3600
+    minutes = (s % 3600) // 60
+    secs = s % 60
+    parts = []
+    if hours > 0:
+        parts.append(f"{hours} 小時")
+    if minutes > 0 or hours > 0:
+        parts.append(f"{minutes} 分")
+    parts.append(f"{secs} 秒")
+    return "".join(parts)
+
+
 def run_full_market_crawler(
     trade_date: str = None,
     markets: str = "all",
@@ -42,6 +64,9 @@ def run_full_market_crawler(
     export_excel: bool = True,
     receiver_email: Optional[str] = None
 ):
+    start_dt = datetime.now()
+    start_str = start_dt.strftime("%Y-%m-%d %H:%M:%S")
+
     if not trade_date:
         today = datetime.now()
         if today.weekday() == 5:
@@ -57,11 +82,12 @@ def run_full_market_crawler(
     name_map = load_stock_name_map()
 
     print("==================================================")
-    print(f"🚀 全市場台股分點買賣日報表統一調度控制器 (Coordinator)")
-    print(f"[*] 執行交易日期: {trade_date}")
-    print(f"[*] 目標市場範疇: {markets.upper()}")
-    print(f"[*] 最大補抓輪數: {max_rounds} 輪 (自適應降速)")
-    print(f"[*] 成果輸出路徑: {output_dir}")
+    log_msg("[*] 全市場台股分點買賣日報表統一調度控制器 (Coordinator) 啟動")
+    log_msg(f"[*] 啟動時間: {start_str}")
+    log_msg(f"[*] 執行交易日期: {trade_date}")
+    log_msg(f"[*] 目標市場範疇: {markets.upper()}")
+    log_msg(f"[*] TWSE 線程數: {workers} Workers | 上市最大補抓: {max_rounds} 輪")
+    log_msg(f"[*] 成果輸出路徑: {output_dir}")
     print("==================================================")
     sys.stdout.flush()
 
@@ -73,11 +99,12 @@ def run_full_market_crawler(
 
     # 1. 抓取上市 (TWSE)
     if markets in ["all", "twse"]:
-        print("\n>>> [階段 1/2] 啟動 TWSE 上市股票分點抓取 (最多 5 輪安全補抓)...")
+        log_msg(">>> [階段 1/2] 啟動 TWSE 上市股票分點抓取 (最多 5 輪安全補抓)...")
         twse_symbols = get_active_listed_symbols()
         total_target_count += len(twse_symbols)
+        log_msg(f"[*] 取得上市標的清單: {len(twse_symbols)} 檔")
         
-        twse_crawler = TWSEBrokerCrawler(delay_sec=0.8, max_retries=6)
+        twse_crawler = TWSEBrokerCrawler(delay_sec=0.4, max_retries=6)
         twse_dfs, twse_failed, r_exec = twse_crawler.crawl_stocks(
             symbols=twse_symbols,
             trade_date=trade_date,
@@ -94,14 +121,14 @@ def run_full_market_crawler(
                 "market": "TWSE",
                 "reason": f"達第 {r_exec} 輪重試上限"
             })
-        print(f"[✓] TWSE 上市抓取完成：成功 {len(twse_dfs)} 檔，未產出 {len(twse_failed)} 檔")
+        log_msg(f"[✓] TWSE 上市抓取完成：成功 {len(twse_dfs)} 檔，未產出 {len(twse_failed)} 檔")
 
     # 2. 抓取上櫃 (TPEX)
     if markets in ["all", "tpex"]:
-        print("\n>>> [階段 2/2] 啟動 TPEX 上櫃股票分點抓取 (單一瀏覽器持久加速模式)...")
+        log_msg(">>> [階段 2/2] 啟動 TPEX 上櫃股票分點抓取 (雙分頁持久加速模式)...")
         tpex_symbols = TPEXBrokerCrawler.get_all_tpex_symbols()
         total_target_count += len(tpex_symbols)
-        print(f"[*] 取得上櫃標的清單: {len(tpex_symbols)} 檔")
+        log_msg(f"[*] 取得上櫃標的清單: {len(tpex_symbols)} 檔")
         
         tpex_crawler = TPEXBrokerCrawler()
         tpex_dfs, tpex_failed = tpex_crawler.crawl_all_stocks_session(
@@ -118,46 +145,53 @@ def run_full_market_crawler(
                 "reason": "上櫃無資料或下載逾時"
             })
             
-        print(f"[✓] TPEX 上櫃抓取完成：成功 {len(tpex_dfs)} 檔，未產出 {len(tpex_failed)} 檔")
+        log_msg(f"[✓] TPEX 上櫃抓取完成：成功 {len(tpex_dfs)} 檔，未產出 {len(tpex_failed)} 檔")
 
     # 3. 聚合全市場資料並輸出
     if not collected_dfs:
-        print("\n[!] 警告：本次執行未取得任何有效分點資料！")
+        log_msg("[!] 警告：本次執行未取得任何有效分點資料！")
         return
 
-    print("\n>>> [數據整合] 彙整全市場分點資料中...")
+    log_msg(">>> [數據整合] 彙整全市場分點資料中...")
     full_df = pd.concat(collected_dfs, ignore_index=True)
     full_df.sort_values(by=["symbol", "broker_id"], inplace=True)
     
     total_rows = len(full_df)
     unique_symbols = full_df["symbol"].nunique()
-    print(f"[+] 總標的數: {unique_symbols} 檔")
-    print(f"[+] 總資料筆數: {total_rows:,} 列")
+    log_msg(f"[+] 總標的數: {unique_symbols} 檔")
+    log_msg(f"[+] 總資料筆數: {total_rows:,} 列")
 
     # 輸出 Parquet 檔案
     parquet_filename = f"api_absr1_{trade_date}_{trade_date}.parquet"
     parquet_path = os.path.join(output_dir, parquet_filename)
     full_df.to_parquet(parquet_path, index=False)
     p_size_mb = os.path.getsize(parquet_path) / (1024 * 1024)
-    print(f"[✓] Parquet 檔案已儲存: {parquet_path} ({p_size_mb:.2f} MB)")
+    log_msg(f"[✓] Parquet 檔案已儲存: {parquet_path} ({p_size_mb:.2f} MB)")
 
     # 輸出 Excel 檔案
     if export_excel:
         excel_filename = f"api_absr1_{trade_date}_{trade_date}.xlsx"
         excel_path = os.path.join(output_dir, excel_filename)
-        print(f"[*] 正在輸出 Excel 檔案: {excel_path} (請稍候)...")
+        log_msg(f"[*] 正在輸出 Excel 檔案: {excel_path} (請稍候)...")
         full_df.to_excel(excel_path, engine="openpyxl", index=False)
         x_size_mb = os.path.getsize(excel_path) / (1024 * 1024)
-        print(f"[✓] Excel 檔案已儲存: {excel_path} ({x_size_mb:.2f} MB)")
+        log_msg(f"[✓] Excel 檔案已儲存: {excel_path} ({x_size_mb:.2f} MB)")
 
-    elapsed_total = time.time() - start_total_t
+    end_dt = datetime.now()
+    end_str = end_dt.strftime("%Y-%m-%d %H:%M:%S")
+    elapsed_total = (end_dt - start_dt).total_seconds()
+    duration_str = format_duration(elapsed_total)
+
     print("==================================================")
-    print(f"[OK] 全流程執行完畢！總耗時: {elapsed_total:.1f} 秒 ({elapsed_total/60:.1f} 分鐘)")
-    print(f"[+] 總標的成功率: {unique_symbols}/{total_target_count} ({unique_symbols/total_target_count*100:.1f}%)")
+    log_msg("[OK] 全市場分點爬蟲全流程執行完畢！")
+    log_msg(f"[*] 啟動時間: {start_str}")
+    log_msg(f"[*] 結束時間: {end_str}")
+    log_msg(f"[*] 總計耗時: {duration_str} (共 {elapsed_total:.1f} 秒)")
+    log_msg(f"[+] 總標的成功率: {unique_symbols}/{total_target_count} ({unique_symbols/total_target_count*100:.1f}%)")
     print("==================================================")
 
     # 4. 發送 Telegram 推播與 Email 通知報告
-    print("\n>>> [通知推播] 檢查並發送執行成果與短缺股票日報...")
+    log_msg(">>> [通知推播] 檢查並發送執行成果與短缺股票日報...")
     from notify_engine import send_telegram_report, send_crawler_report_email
     
     # 優先發送 Telegram 即時推播
@@ -169,7 +203,10 @@ def run_full_market_crawler(
         failed_stocks=all_failed_items,
         total_rows=total_rows,
         elapsed_seconds=elapsed_total,
-        rounds_executed=rounds_executed
+        rounds_executed=rounds_executed,
+        start_time_str=start_str,
+        end_time_str=end_str,
+        duration_str=duration_str
     )
 
     # 次要發送 Email (若有設定 SMTP)
@@ -182,7 +219,10 @@ def run_full_market_crawler(
         total_rows=total_rows,
         elapsed_seconds=elapsed_total,
         rounds_executed=rounds_executed,
-        receiver_email=receiver_email
+        receiver_email=receiver_email,
+        start_time_str=start_str,
+        end_time_str=end_str,
+        duration_str=duration_str
     )
 
 

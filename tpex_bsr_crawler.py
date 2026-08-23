@@ -283,9 +283,10 @@ class TPEXBrokerCrawler:
                         time.sleep(0.3)
 
                     # 檢查是否直接提示查無資料 (快速跳過)
+                    ts_now = datetime.now().strftime("%H:%M:%S")
                     if current_tab.ele("text:查無符合條件之資料", timeout=0.1) or current_tab.ele("text:查無資料", timeout=0.05):
                         failed_symbols.append(sym)
-                        print(f"  [上櫃 {idx}/{total}] [無資料/跳過] {sym}")
+                        print(f"[{ts_now}]   [上櫃 {idx}/{total}] [無資料/跳過] {sym}")
                         continue
 
                     # 4. 點擊下載按鈕
@@ -305,6 +306,7 @@ class TPEXBrokerCrawler:
                                 found_csv = candidates[0]
                                 break
 
+                        ts_res = datetime.now().strftime("%H:%M:%S")
                         if found_csv and os.path.exists(found_csv):
                             df = self.parse_tpex_csv_to_dataframe(found_csv, sym, trade_date)
                             if df is not None and not df.empty:
@@ -312,20 +314,22 @@ class TPEXBrokerCrawler:
                                 elapsed = time.time() - start_t
                                 speed = idx / elapsed if elapsed > 0 else 0
                                 remain = (total - idx) / speed if speed > 0 else 0
-                                print(f"  [上櫃 {idx}/{total}] [OK] {sym} ({len(df)} 筆) | 速度: {speed:.2f} 檔/s | 剩餘約: {remain/60:.1f} 分鐘")
+                                print(f"[{ts_res}]   [上櫃 {idx}/{total}] [OK] {sym} ({len(df)} 筆) | 速度: {speed:.2f} 檔/s | 剩餘約: {remain/60:.1f} 分鐘")
                             else:
                                 failed_symbols.append(sym)
-                                print(f"  [上櫃 {idx}/{total}] [無資料/略過] {sym}")
+                                print(f"[{ts_res}]   [上櫃 {idx}/{total}] [無資料/略過] {sym}")
                         else:
                             failed_symbols.append(sym)
-                            print(f"  [上櫃 {idx}/{total}] [無資料/略過] {sym}")
+                            print(f"[{ts_res}]   [上櫃 {idx}/{total}] [無資料/略過] {sym}")
                     else:
+                        ts_btn = datetime.now().strftime("%H:%M:%S")
                         failed_symbols.append(sym)
-                        print(f"  [上櫃 {idx}/{total}] [查無按鈕] {sym}")
+                        print(f"[{ts_btn}]   [上櫃 {idx}/{total}] [查無按鈕] {sym}")
 
                 except Exception as e:
+                    ts_err = datetime.now().strftime("%H:%M:%S")
                     failed_symbols.append(sym)
-                    print(f"  [上櫃 {idx}/{total}] [異常] {sym} ({e})")
+                    print(f"[{ts_err}]   [上櫃 {idx}/{total}] [異常] {sym} ({e})")
 
                 sys.stdout.flush()
 

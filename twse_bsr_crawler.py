@@ -325,8 +325,9 @@ class TWSEBrokerCrawler:
                     elapsed = time.time() - start_time
                     speed = completed_count / elapsed if elapsed > 0 else 0
                     remaining = (total_symbols - completed_count) / speed if speed > 0 else 0
+                    ts_now = datetime.now().strftime("%H:%M:%S")
                     print(
-                        f"[第1輪 {completed_count}/{total_symbols}] {status_str} | "
+                        f"[{ts_now}] [第1輪 {completed_count}/{total_symbols}] {status_str} | "
                         f"累積: {total_rows:,} 筆 | 速度: {speed:.1f} 檔/s | "
                         f"剩餘約: {remaining/60:.1f} 分鐘"
                     )
@@ -342,9 +343,10 @@ class TWSEBrokerCrawler:
             retry_count = len(failed_symbols)
             current_delay = delay_schedule[min(rounds_executed - 2, len(delay_schedule) - 1)]
             
+            ts_round = datetime.now().strftime("%H:%M:%S")
             print(f"\n" + "-"*50)
-            print(f"[*] 啟動第 {rounds_executed}/{max_retry_rounds} 輪精準安全補抓佇列 (待補抓: {retry_count} 檔)")
-            print(f"[*] 安全防護策略: 單執行緒模式, 請求間隔 {current_delay}s, 預防 TWSE 頻率限制")
+            print(f"[{ts_round}] [*] 啟動第 {rounds_executed}/{max_retry_rounds} 輪精準安全補抓佇列 (待補抓: {retry_count} 檔)")
+            print(f"[{ts_round}] [*] 安全防護策略: 單執行緒模式, 請求間隔 {current_delay}s, 預防 TWSE 頻率限制")
             print(f"-"*50)
             sys.stdout.flush()
             
@@ -361,27 +363,34 @@ class TWSEBrokerCrawler:
                 except Exception:
                     pass
 
+            retry_crawler = TWSEBrokerCrawler(delay_sec=current_delay, max_retries=6)
+            still_failed = []
+            retry_success = 0
+
             for i, sym in enumerate(failed_symbols, 1):
                 sym_name = name_map.get(sym, "")
                 name_str = f"({sym_name})" if sym_name else ""
                 
                 sym, df = retry_crawler._crawl_single_worker(sym, trade_date)
+                ts_item = datetime.now().strftime("%H:%M:%S")
                 if df is not None and not df.empty:
                     all_dfs.append(df)
                     total_rows += len(df)
                     retry_success += 1
-                    print(f"  [第{rounds_executed}輪 {i}/{retry_count}] [OK] {sym} {name_str} -> 成功補回 {len(df)} 筆！")
+                    print(f"[{ts_item}]   [第{rounds_executed}輪 {i}/{retry_count}] [OK] {sym} {name_str} -> 成功補回 {len(df)} 筆！")
                 else:
                     still_failed.append(sym)
-                    print(f"  [第{rounds_executed}輪 {i}/{retry_count}] [未成功/無交易] {sym} {name_str} -> 查無分點或重試逾時")
+                    print(f"[{ts_item}]   [第{rounds_executed}輪 {i}/{retry_count}] [未成功/無交易] {sym} {name_str} -> 查無分點或重試逾時")
                 sys.stdout.flush()
 
-            print(f"[+] 第 {rounds_executed} 輪補抓完成！成功救回 {retry_success}/{retry_count} 檔 (剩餘未成功: {len(still_failed)} 檔)")
+            ts_done = datetime.now().strftime("%H:%M:%S")
+            print(f"[{ts_done}] [+] 第 {rounds_executed} 輪補抓完成！成功救回 {retry_success}/{retry_count} 檔 (剩餘未成功: {len(still_failed)} 檔)")
             failed_symbols = still_failed
 
+        ts_all_done = datetime.now().strftime("%H:%M:%S")
         if not failed_symbols:
-            print(f"\n[+] 全市場標的 100% 抓取達成！(共執行 {rounds_executed} 輪)")
+            print(f"\n[{ts_all_done}] [+] 全市場標的 100% 抓取達成！(共執行 {rounds_executed} 輪)")
         else:
-            print(f"\n[!] 達到最大補抓輪數 ({max_retry_rounds} 輪)，剩餘未產出標的: {len(failed_symbols)} 檔")
+            print(f"\n[{ts_all_done}] [!] 達到最大補抓輪數 ({max_retry_rounds} 輪)，剩餘未產出標的: {len(failed_symbols)} 檔")
 
         return all_dfs, failed_symbols, rounds_executed
