@@ -30,23 +30,27 @@ jobs:
           python-version: '3.12'
           cache: 'pip'
 
-      - name: 安裝系統依賴 (Chromium for TPEX)
+      - name: 安裝系統依賴並啟動 Xvfb 虛擬桌面 (for TPEX 瀏覽器)
         run: |
           sudo apt-get update
           sudo apt-get install -y chromium-browser chromium-chromedriver xvfb
+          Xvfb :99 -screen 0 1920x1080x24 &
+          sleep 2
 
       - name: 安裝 Python 套件依賴
         run: |
-          pip install --upgrade pip
-          if [ -f requirements.txt ]; then
+          python -m pip install --upgrade pip
+          if [ -f "requirements.txt" ]; then
             pip install -r requirements.txt
-          elif [ -f stock_data_downloader/requirements.txt ]; then
+          elif [ -f "stock_data_downloader/requirements.txt" ]; then
             pip install -r stock_data_downloader/requirements.txt
+          else
+            pip install -r dataProject/requirements.txt
           fi
-          pip install tensorflow
 
       - name: 執行全市場分點爬蟲 (5 輪安全補抓 + Telegram/Email 通知)
         env:
+          DISPLAY: ":99"
           PYTHONIOENCODING: "utf-8"
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
@@ -67,9 +71,9 @@ jobs:
           fi
           
           if [ -n "$TARGET_DATE" ]; then
-            xvfb-run -a python "$TARGET_SCRIPT" --market "$MARKET" --date "$TARGET_DATE" --workers 4 --max-rounds 5 --no-excel
+            python "$TARGET_SCRIPT" --market "$MARKET" --date "$TARGET_DATE" --workers 4 --max-rounds 5 --no-excel
           else
-            xvfb-run -a python "$TARGET_SCRIPT" --market "$MARKET" --workers 4 --max-rounds 5 --no-excel
+            python "$TARGET_SCRIPT" --market "$MARKET" --workers 4 --max-rounds 5 --no-excel
           fi
 
           # 動態提取產出的 Parquet 檔名作為 Artifact 名稱 (如 api_absr1_2026-08-21_2026-08-21)

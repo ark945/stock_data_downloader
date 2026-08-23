@@ -205,28 +205,30 @@ class TPEXBrokerCrawler:
         os.makedirs(save_dir, exist_ok=True)
         temp_user_data = tempfile.mkdtemp()
 
+        # 3. 確保設定 DISPLAY (Linux Xvfb)
+        if "DISPLAY" not in os.environ and os.name != "nt":
+            os.environ["DISPLAY"] = ":99"
+
         co = ChromiumOptions()
+        co.set_local_port(9333)
+        if sys.platform.startswith("linux"):
+            for bin_p in ["/usr/bin/chromium-browser", "/usr/bin/chromium", "/usr/bin/google-chrome"]:
+                if os.path.exists(bin_p):
+                    co.set_paths(browser_path=bin_p)
+                    break
+
         co.set_argument("--no-sandbox")
         co.set_argument("--disable-gpu")
         co.set_argument("--disable-dev-shm-usage")
-        co.set_argument("--window-size=1280,720")
+        co.set_argument("--disable-infobars")
+        co.set_argument("--window-size=1920,1080")
         co.set_argument("--excludeSwitches", "enable-automation")
         co.set_argument("--useAutomationExtension", False)
-        co.set_argument("--no-first-run")
-        co.set_argument("--no-default-browser-check")
-
-        # 若在 Linux / GitHub Actions 環境下，配置無頭參數與 Google Chrome 路徑
-        if sys.platform.startswith("linux"):
-            co.set_argument("--headless=new")
-            co.set_argument("--disable-setuid-sandbox")
-            for bin_path in ["/usr/bin/google-chrome", "/usr/bin/google-chrome-stable", "/usr/bin/chromium", "/usr/bin/chromium-browser"]:
-                if os.path.exists(bin_path):
-                    co.set_browser_path(bin_path)
-                    break
 
         co.set_user_data_path(temp_user_data)
         co.set_pref("download.default_directory", save_dir)
         co.set_pref("download.prompt_for_download", False)
+        co.set_pref("safebrowsing.enabled", True)
 
         page = None
         collected_dfs = []
