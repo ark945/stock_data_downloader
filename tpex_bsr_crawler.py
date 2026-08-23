@@ -206,12 +206,22 @@ class TPEXBrokerCrawler:
         temp_user_data = tempfile.mkdtemp()
 
         co = ChromiumOptions()
+        co.auto_port()  # 自動分配可用 Debug 端口避免衝突
         co.set_argument("--no-sandbox")
         co.set_argument("--disable-gpu")
         co.set_argument("--disable-dev-shm-usage")
         co.set_argument("--window-size=1280,720")
         co.set_argument("--excludeSwitches", "enable-automation")
         co.set_argument("--useAutomationExtension", False)
+
+        # 若在 Linux / GitHub Actions 無介面環境下，啟用 headless
+        if sys.platform.startswith("linux"):
+            co.set_argument("--headless=new")
+            for bin_path in ["/usr/bin/chromium-browser", "/usr/bin/chromium", "/usr/bin/google-chrome"]:
+                if os.path.exists(bin_path):
+                    co.set_browser_path(bin_path)
+                    break
+
         co.set_user_data_path(temp_user_data)
         co.set_pref("download.default_directory", save_dir)
         co.set_pref("download.prompt_for_download", False)
