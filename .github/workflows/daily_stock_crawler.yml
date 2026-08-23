@@ -77,11 +77,21 @@ jobs:
             python "$TARGET_SCRIPT" --market "$MARKET" --workers 2 --max-rounds 5 --no-excel
           fi
 
+          # 動態提取產出的 Parquet 檔名作為 Artifact 名稱 (如 api_absr1_2026-08-21_2026-08-21)
+          PARQUET_PATH=$(find . -name "api_absr1_*.parquet" | head -n 1)
+          if [ -n "$PARQUET_PATH" ]; then
+            PARQUET_BASENAME=$(basename "$PARQUET_PATH" .parquet)
+            echo "ARTIFACT_NAME=$PARQUET_BASENAME" >> $GITHUB_ENV
+            echo "[*] 設定 Artifact 名稱為: $PARQUET_BASENAME"
+          else
+            echo "ARTIFACT_NAME=stock-bsr-parquet-${{ github.run_number }}" >> $GITHUB_ENV
+          fi
+
       - name: 上傳成果為 GitHub Artifact (僅 Parquet，保留 7 天)
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: stock-bsr-parquet-${{ github.run_number }}
+          name: ${{ env.ARTIFACT_NAME || 'api_absr1_daily_parquet' }}
           path: |
             **/output/*.parquet
           retention-days: 7
