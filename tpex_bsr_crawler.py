@@ -387,17 +387,17 @@ class TPEXBrokerCrawler:
 
             for idx, sym in enumerate(stock_codes, 1):
                 try:
-                    # 週期性主動健康刷新 (每 40 檔重整一次，保持 DOM 與 Turnstile Token 最佳狀態)
-                    if idx > 1 and idx % 40 == 0:
+                    # 週期性主動健康刷新 (縮短為每 20 檔重整一次，永遠走在 5 分鐘 Turnstile Token 過期之前)
+                    if idx > 1 and idx % 20 == 0:
                         page.get(self.TPEX_URL, retry=3, timeout=20)
-                        time.sleep(2.5)
+                        time.sleep(2.0)
 
                     target_csv_file = os.path.join(save_dir, f"{sym}.csv")
                     if os.path.exists(target_csv_file):
                         try: os.remove(target_csv_file)
                         except OSError: pass
 
-                    # 1. 尋找輸入框並填入代號 (動態獲取活元素，杜絕 Stale Element)
+                    # 定位輸入框並填入代號
                     stk_input = page.ele("css:input.code", timeout=4) or page.ele("@name=code", timeout=4)
                     if not stk_input:
                         page.get(self.TPEX_URL, retry=2, timeout=15)
@@ -409,48 +409,49 @@ class TPEXBrokerCrawler:
 
                     stk_input.input(sym, clear=True, by_js=True)
 
-                    # 2. 點擊查詢按鈕
+                    # 點擊查詢按鈕
                     q_btn = page.ele("css:.btn-query", timeout=2) or page.ele("text:查詢", timeout=2)
                     if q_btn:
                         q_btn.click(by_js=True)
-                        time.sleep(0.4)
+                        time.sleep(0.5)
 
-                    # 3. 查詢完成後動態獲取下載按鈕 (確保元素已渲染就緒)
+                    # 動態獲取下載按鈕
                     d_btn = page.ele("text:下載 CSV (UTF-8)", timeout=3) or page.ele("text:下載 CSV", timeout=3)
                     if d_btn:
                         mission = d_btn.click.to_download(save_path=save_dir, rename=f"{sym}.csv")
                         mission.wait(show=False, timeout=3.5)
 
-                        # 單檔即時二次重試 (Instant Retry)
-                        if not os.path.exists(target_csv_file):
-                            time.sleep(0.3)
+                    # 若下載未成功 (代表 Turnstile Token 可能已過期)，啟動【即時刷新重認證補抓】
+                    if not os.path.exists(target_csv_file):
+                        page.get(self.TPEX_URL, retry=2, timeout=15)
+                        time.sleep(2.0)
+                        stk_input = page.ele("css:input.code", timeout=4) or page.ele("@name=code", timeout=4)
+                        if stk_input:
+                            stk_input.input(sym, clear=True, by_js=True)
+                            q_btn = page.ele("css:.btn-query", timeout=2) or page.ele("text:查詢", timeout=2)
                             if q_btn:
                                 q_btn.click(by_js=True)
-                                time.sleep(0.4)
-                            d_btn_retry = page.ele("text:下載 CSV (UTF-8)", timeout=2) or page.ele("text:下載 CSV", timeout=2)
+                                time.sleep(0.5)
+                            d_btn_retry = page.ele("text:下載 CSV (UTF-8)", timeout=3) or page.ele("text:下載 CSV", timeout=3)
                             if d_btn_retry:
                                 mission2 = d_btn_retry.click.to_download(save_path=save_dir, rename=f"{sym}.csv")
                                 mission2.wait(show=False, timeout=3.5)
 
-                        ts_res = datetime.now().strftime("%H:%M:%S")
-                        if os.path.exists(target_csv_file):
-                            df = self.parse_tpex_csv_to_dataframe(target_csv_file, sym, trade_date)
-                            if df is not None and not df.empty:
-                                collected_dfs.append(df)
-                                elapsed = time.time() - start_t
-                                speed = idx / elapsed if elapsed > 0 else 0
-                                remain = (total - idx) / speed if speed > 0 else 0
-                                print(f"[{ts_res}]   [上櫃 {idx}/{total}] [OK] {sym} ({len(df)} 筆) | 速度: {speed:.2f} 檔/s | 剩餘約: {remain/60:.1f} 分鐘")
-                            else:
-                                failed_symbols.append(sym)
-                                print(f"[{ts_res}]   [上櫃 {idx}/{total}] [無資料/略過] {sym}")
+                    ts_res = datetime.now().strftime("%H:%M:%S")
+                    if os.path.exists(target_csv_file):
+                        df = self.parse_tpex_csv_to_dataframe(target_csv_file, sym, trade_date)
+                        if df is not None and not df.empty:
+                            collected_dfs.append(df)
+                            elapsed = time.time() - start_t
+                            speed = idx / elapsed if elapsed > 0 else 0
+                            remain = (total - idx) / speed if speed > 0 else 0
+                            print(f"[{ts_res}]   [上櫃 {idx}/{total}] [OK] {sym} ({len(df)} 筆) | 速度: {speed:.2f} 檔/s | 剩餘約: {remain/60:.1f} 分鐘")
                         else:
                             failed_symbols.append(sym)
                             print(f"[{ts_res}]   [上櫃 {idx}/{total}] [無資料/略過] {sym}")
                     else:
-                        ts_btn = datetime.now().strftime("%H:%M:%S")
                         failed_symbols.append(sym)
-                        print(f"[{ts_btn}]   [上櫃 {idx}/{total}] [查無按鈕] {sym}")
+                        print(f"[{ts_res}]   [上櫃 {idx}/{total}] [無資料/略過] {sym}")
 
                 except Exception as e:
                     ts_err = datetime.now().strftime("%H:%M:%S")
