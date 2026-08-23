@@ -125,7 +125,7 @@ def run_full_market_crawler(
 
     # 2. 抓取上櫃 (TPEX)
     if markets in ["all", "tpex"]:
-        log_msg(">>> [階段 2/2] 啟動 TPEX 上櫃股票分點抓取 (雙 Worker 多進程錯時並行極速模式)...")
+        log_msg(">>> [階段 2/2] 啟動 TPEX 上櫃股票分點抓取 (單一純淨持久加速模式)...")
         tpex_symbols = TPEXBrokerCrawler.get_all_tpex_symbols()
         total_target_count += len(tpex_symbols)
         log_msg(f"[*] 取得上櫃標的清單: {len(tpex_symbols)} 檔")
@@ -134,7 +134,7 @@ def run_full_market_crawler(
         tpex_dfs, tpex_failed = tpex_crawler.crawl_all_stocks_session(
             stock_codes=tpex_symbols,
             trade_date=trade_date,
-            workers=2
+            workers=1
         )
         collected_dfs.extend(tpex_dfs)
         
