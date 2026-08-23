@@ -69,9 +69,9 @@ jobs:
           fi
           
           if [ -n "$TARGET_DATE" ]; then
-            python "$TARGET_SCRIPT" --market "$MARKET" --date "$TARGET_DATE" --workers 4 --max-rounds 5 --shard-id ${{ matrix.shard }} --num-shards 6 --no-excel
+            python "$TARGET_SCRIPT" --market "$MARKET" --date "$TARGET_DATE" --workers 2 --max-rounds 5 --shard-id ${{ matrix.shard }} --num-shards 6 --no-excel
           else
-            python "$TARGET_SCRIPT" --market "$MARKET" --workers 4 --max-rounds 5 --shard-id ${{ matrix.shard }} --num-shards 6 --no-excel
+            python "$TARGET_SCRIPT" --market "$MARKET" --workers 2 --max-rounds 5 --shard-id ${{ matrix.shard }} --num-shards 6 --no-excel
           fi
 
       - name: 上傳分片 Parquet 產物
