@@ -99,6 +99,7 @@ class TWSEBrokerCrawler:
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
             "Accept-Language": "zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Referer": "https://bsr.twse.com.tw/bshtm/bsMenu.aspx",
         }
 
     def _get_latest_trade_date(self) -> str:
@@ -166,8 +167,11 @@ class TWSEBrokerCrawler:
 
                 # 若是驗證碼錯誤，才進行下一次換圖重試
                 if "驗證碼錯誤" in post_html or "驗證碼不符" in post_html:
-                    time.sleep(0.1)
+                    time.sleep(0.15)
                     continue
+
+                # 等待伺服器端 Session 生成 CSV 檔案緩存 (避免 403 Forbidden)
+                time.sleep(0.35)
 
                 # 4. 下載 CSV 內容
                 r_content = session.get(self.CONTENT_URL, timeout=8)
