@@ -212,11 +212,14 @@ class TPEXBrokerCrawler:
         co.set_argument("--window-size=1280,720")
         co.set_argument("--excludeSwitches", "enable-automation")
         co.set_argument("--useAutomationExtension", False)
+        co.set_argument("--no-first-run")
+        co.set_argument("--no-default-browser-check")
 
-        # 若在 Linux / GitHub Actions 無介面環境下，啟用 headless
+        # 若在 Linux / GitHub Actions 環境下，配置無頭參數與 Google Chrome 路徑
         if sys.platform.startswith("linux"):
             co.set_argument("--headless=new")
-            for bin_path in ["/usr/bin/google-chrome", "/usr/bin/chromium-browser", "/usr/bin/chromium"]:
+            co.set_argument("--disable-setuid-sandbox")
+            for bin_path in ["/usr/bin/google-chrome", "/usr/bin/google-chrome-stable", "/usr/bin/chromium", "/usr/bin/chromium-browser"]:
                 if os.path.exists(bin_path):
                     co.set_browser_path(bin_path)
                     break

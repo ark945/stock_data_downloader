@@ -55,14 +55,9 @@ jobs:
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL }}
+          TARGET_DATE: ${{ github.event.inputs.target_date }}
+          MARKET: ${{ github.event.inputs.market || 'all' }}
         run: |
-          TARGET_DATE="${{ github.event.inputs.target_date }}"
-          MARKET="${{ github.event.inputs.market }}"
-          
-          if [ -z "$MARKET" ]; then
-            MARKET="all"
-          fi
-          
           if [ -f "stock_crawler_coordinator.py" ]; then
             TARGET_SCRIPT="stock_crawler_coordinator.py"
           elif [ -f "stock_data_downloader/stock_crawler_coordinator.py" ]; then
@@ -72,9 +67,9 @@ jobs:
           fi
           
           if [ -n "$TARGET_DATE" ]; then
-            python "$TARGET_SCRIPT" --market "$MARKET" --date "$TARGET_DATE" --workers 4 --max-rounds 5 --no-excel
+            xvfb-run -a python "$TARGET_SCRIPT" --market "$MARKET" --date "$TARGET_DATE" --workers 4 --max-rounds 5 --no-excel
           else
-            python "$TARGET_SCRIPT" --market "$MARKET" --workers 4 --max-rounds 5 --no-excel
+            xvfb-run -a python "$TARGET_SCRIPT" --market "$MARKET" --workers 4 --max-rounds 5 --no-excel
           fi
 
           # 動態提取產出的 Parquet 檔名作為 Artifact 名稱 (如 api_absr1_2026-08-21_2026-08-21)
