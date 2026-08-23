@@ -45,9 +45,14 @@ jobs:
           fi
           pip install tensorflow
 
-      - name: 執行全市場分點爬蟲 (僅產出 Parquet 高效儲存)
+      - name: 執行全市場分點爬蟲 (5 輪安全補抓 + Email 短缺日報)
         env:
           PYTHONIOENCODING: "utf-8"
+          SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL }}
         run: |
           TARGET_DATE="${{ github.event.inputs.target_date }}"
           MARKET="${{ github.event.inputs.market }}"
@@ -65,9 +70,9 @@ jobs:
           fi
           
           if [ -n "$TARGET_DATE" ]; then
-            python "$TARGET_SCRIPT" --market "$MARKET" --date "$TARGET_DATE" --workers 2 --no-excel
+            python "$TARGET_SCRIPT" --market "$MARKET" --date "$TARGET_DATE" --workers 2 --max-rounds 5 --no-excel
           else
-            python "$TARGET_SCRIPT" --market "$MARKET" --workers 2 --no-excel
+            python "$TARGET_SCRIPT" --market "$MARKET" --workers 2 --max-rounds 5 --no-excel
           fi
 
       - name: 上傳成果為 GitHub Artifact (僅 Parquet，保留 7 天)
