@@ -119,6 +119,11 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           GDRIVE_SERVICE_ACCOUNT_KEY: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_KEY }}
           GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID || '1L6f9jQx9phz_ZoVfDmBQViEVnoDHh_0a' }}
+          SMTP_SERVER: ${{ secrets.SMTP_SERVER || 'smtp.gmail.com' }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT || '587' }}
+          SENDER_EMAIL: ${{ secrets.SENDER_EMAIL || secrets.SMTP_USER }}
+          SENDER_PASSWORD: ${{ secrets.SENDER_PASSWORD || secrets.SMTP_PASSWORD }}
+          RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL || secrets.NOTIFICATION_EMAIL }}
           TARGET_DATE: ${{ github.event.inputs.target_date }}
         run: |
           mkdir -p download_shards output
