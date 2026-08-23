@@ -398,9 +398,9 @@ class TPEXBrokerCrawler:
                         page.get(self.TPEX_URL, retry=3, timeout=20)
                         time.sleep(2.0)
 
-                    target_csv_file = os.path.join(save_dir, f"{sym}.csv")
-                    if os.path.exists(target_csv_file):
-                        try: os.remove(target_csv_file)
+                    # 清空暫存目錄下的所有舊 CSV
+                    for old_f in glob.glob(os.path.join(save_dir, "*.csv")):
+                        try: os.remove(old_f)
                         except OSError: pass
 
                     # 定位輸入框並填入代號
@@ -421,14 +421,26 @@ class TPEXBrokerCrawler:
                         q_btn.click(by_js=True)
                         time.sleep(0.5)
 
-                    # 動態獲取下載按鈕
-                    d_btn = page.ele("text:下載 CSV (UTF-8)", timeout=3) or page.ele("text:下載 CSV", timeout=3)
-                    if d_btn:
-                        mission = d_btn.click.to_download(save_path=save_dir, rename=f"{sym}.csv")
-                        mission.wait(show=False, timeout=3.5)
+                    found_csv = None
 
-                    # 若下載未成功 (代表 Turnstile Token 可能已過期)，啟動【即時刷新重認證補抓】
-                    if not os.path.exists(target_csv_file):
+                    # 動態獲取下載按鈕並觸發下載
+                    d_btn = page.ele("text:下載 CSV", timeout=3) or page.ele("text:下載 CSV (UTF-8)", timeout=3)
+                    if d_btn:
+                        try:
+                            d_btn.click.to_download(save_path=save_dir, rename=f"{sym}.csv")
+                        except Exception:
+                            try: d_btn.click(by_js=True)
+                            except Exception: pass
+                        
+                        # 輪詢查找最新產出的 CSV (最多等 3.5 秒)
+                        for _ in range(7):
+                            time.sleep(0.5)
+                            found_csv = self._find_downloaded_csv(sym, save_dir)
+                            if found_csv:
+                                break
+
+                    # 若未找到檔案 (代表 Token 可能過期或頁面卡住)，啟動【即時刷新重認證補抓】
+                    if not found_csv:
                         page.get(self.TPEX_URL, retry=2, timeout=15)
                         time.sleep(2.0)
                         stk_input = page.ele("css:input.code", timeout=4) or page.ele("@name=code", timeout=4)
@@ -438,14 +450,22 @@ class TPEXBrokerCrawler:
                             if q_btn:
                                 q_btn.click(by_js=True)
                                 time.sleep(0.5)
-                            d_btn_retry = page.ele("text:下載 CSV (UTF-8)", timeout=3) or page.ele("text:下載 CSV", timeout=3)
+                            d_btn_retry = page.ele("text:下載 CSV", timeout=3) or page.ele("text:下載 CSV (UTF-8)", timeout=3)
                             if d_btn_retry:
-                                mission2 = d_btn_retry.click.to_download(save_path=save_dir, rename=f"{sym}.csv")
-                                mission2.wait(show=False, timeout=3.5)
+                                try:
+                                    d_btn_retry.click.to_download(save_path=save_dir, rename=f"{sym}.csv")
+                                except Exception:
+                                    try: d_btn_retry.click(by_js=True)
+                                    except Exception: pass
+                                for _ in range(7):
+                                    time.sleep(0.5)
+                                    found_csv = self._find_downloaded_csv(sym, save_dir)
+                                    if found_csv:
+                                        break
 
                     ts_res = get_taipei_now().strftime("%H:%M:%S")
-                    if os.path.exists(target_csv_file):
-                        df = self.parse_tpex_csv_to_dataframe(target_csv_file, sym, trade_date)
+                    if found_csv and os.path.exists(found_csv):
+                        df = self.parse_tpex_csv_to_dataframe(found_csv, sym, trade_date)
                         if df is not None and not df.empty:
                             collected_dfs.append(df)
                             elapsed = time.time() - start_t
