@@ -158,18 +158,19 @@ def merge_parquet_shards(output_dir: str = "output", trade_date: str = "", marke
     print(f"==================================================")
     sys.stdout.flush()
 
-    shard_files = sorted(glob.glob(os.path.join(output_dir, "*_shard_*.parquet")))
+    shard_glob = f"*_{market}_shard_*.parquet" if market in ["twse", "tpex"] else "*_shard_*.parquet"
+    shard_files = sorted(glob.glob(os.path.join(output_dir, shard_glob)))
 
     if not shard_files:
-        print("[!] 未在 output/ 找到分片檔案，搜尋工作區其他目錄...")
-        shard_files = sorted(glob.glob(os.path.join(".", "**", "*_shard_*.parquet"), recursive=True))
+        print(f"[!] 未在 output/ 找到 {market} 分片檔案 (pattern: {shard_glob})，搜尋工作區其他目錄...")
+        shard_files = sorted(glob.glob(os.path.join(".", "**", shard_glob), recursive=True))
         if shard_files:
             print(f"[+] 在其他子目錄找到 {len(shard_files)} 個分片檔案，正在集中複製...")
             for sf in shard_files:
                 import shutil
                 dest = os.path.join(output_dir, os.path.basename(sf))
                 shutil.copy2(sf, dest)
-            shard_files = sorted(glob.glob(os.path.join(output_dir, "*_shard_*.parquet")))
+            shard_files = sorted(glob.glob(os.path.join(output_dir, shard_glob)))
 
     if not shard_files:
         print("[!] 查無任何分片產物！檢查是否已有單一完整檔...")
