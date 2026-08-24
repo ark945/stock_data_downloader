@@ -14,6 +14,12 @@ import json
 import base64
 from typing import Optional, Dict, Any
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
+except ImportError:
+    pass
+
 # 目標 Google Drive 資料夾 ID：一律由環境變數 GDRIVE_FOLDER_ID 提供
 DEFAULT_GDRIVE_FOLDER_ID = ""
 SCOPES = ["https://www.googleapis.com/auth/drive"]

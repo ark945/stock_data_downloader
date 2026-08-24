@@ -13,6 +13,12 @@ import tempfile
 import requests
 from datetime import datetime, timezone, timedelta
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
+except ImportError:
+    pass
+
 TAIPEI_TZ = timezone(timedelta(hours=8))
 
 def test_google_drive_connection():

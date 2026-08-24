@@ -20,6 +20,12 @@ from twse_bsr_crawler import TWSEBrokerCrawler, get_active_listed_symbols
 from tpex_bsr_crawler import TPEXBrokerCrawler
 from notify_engine import send_crawler_report_email
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
+except ImportError:
+    pass
+
 TAIPEI_TZ = timezone(timedelta(hours=8))
 
 def get_taipei_now() -> datetime:

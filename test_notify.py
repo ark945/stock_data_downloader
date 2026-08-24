@@ -10,6 +10,12 @@ import sys
 from datetime import datetime
 from notify_engine import send_telegram_report, send_crawler_report_email
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
+except ImportError:
+    pass
+
 
 def run_notification_test():
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
