@@ -357,12 +357,20 @@ class TPEXBrokerCrawler:
     def _launch_tpex_browser_session(self, port: int):
         """啟動一個全新 Chromium session，回傳 (page, temp_user_data, save_dir)。
         每次呼叫產生獨立 user data 與下載目錄，供 hard-restart 使用。
-        注意：save_dir 必須在專案目錄底下，因為 snap 版 chromium 沙盒無法寫入 /tmp。"""
+        save_dir 必須位於專案目錄且權限 0o755，snap chromium 才能寫入下載暫存檔。"""
         from DrissionPage import ChromiumPage, ChromiumOptions
 
         os.makedirs(self.download_dir, exist_ok=True)
-        save_dir = tempfile.mkdtemp(prefix="batch_", dir=self.download_dir)
-        temp_user_data = tempfile.mkdtemp(prefix="userdata_", dir=self.download_dir)
+        unique = f"{port}_{int(time.time() * 1000)}"
+        save_dir = os.path.join(self.download_dir, f"batch_{unique}")
+        temp_user_data = os.path.join(self.download_dir, f"userdata_{unique}")
+        os.makedirs(save_dir, exist_ok=True)
+        os.makedirs(temp_user_data, exist_ok=True)
+        try:
+            os.chmod(save_dir, 0o755)
+            os.chmod(temp_user_data, 0o755)
+        except OSError:
+            pass
 
         if "DISPLAY" not in os.environ and os.name != "nt":
             os.environ["DISPLAY"] = ":99"
