@@ -354,30 +354,19 @@ class TPEXBrokerCrawler:
             print(f"[!] 解析 TPEX CSV 失敗 ({stock_id}): {e}")
             return None
 
-    def crawl_all_stocks_session(
-        self,
-        stock_codes: List[str],
-        trade_date: str,
-        workers: int = 1
-    ) -> Tuple[List[pd.DataFrame], List[str]]:
-        """
-        使用單一持久化 Chromium 瀏覽器會話循序抓取全市場上櫃股票 (規避 Cloudflare 限流，100% 穩定零漏抓)
-        """
-        try:
-            from DrissionPage import ChromiumPage, ChromiumOptions
-        except ImportError:
-            print("[!] 未安裝 DrissionPage，請執行 pip install DrissionPage")
-            return [], stock_codes
+    def _launch_tpex_browser_session(self, port: int):
+        """啟動一個全新 Chromium session，回傳 (page, temp_user_data, save_dir)。
+        每次呼叫產生獨立 user data 與下載目錄，供 hard-restart 使用。"""
+        from DrissionPage import ChromiumPage, ChromiumOptions
 
-        save_dir = os.path.join(self.download_dir, "batch_session")
-        os.makedirs(save_dir, exist_ok=True)
-        temp_user_data = tempfile.mkdtemp()
+        save_dir = tempfile.mkdtemp(prefix="tpex_batch_")
+        temp_user_data = tempfile.mkdtemp(prefix="tpex_userdata_")
 
         if "DISPLAY" not in os.environ and os.name != "nt":
             os.environ["DISPLAY"] = ":99"
 
         co = ChromiumOptions()
-        co.set_local_port(9333)
+        co.set_local_port(port)
         if sys.platform.startswith("linux"):
             for bin_p in ["/usr/bin/chromium-browser", "/usr/bin/chromium", "/usr/bin/google-chrome"]:
                 if os.path.exists(bin_p):
@@ -397,26 +386,82 @@ class TPEXBrokerCrawler:
         co.set_pref("download.prompt_for_download", False)
         co.set_pref("safebrowsing.enabled", True)
 
+        page = ChromiumPage(addr_or_opts=co)
+        page.set.download_path(save_dir)
+        try:
+            page.download.set.show_msg(False)
+        except Exception:
+            pass
+        page.get(self.TPEX_URL, retry=3, timeout=25)
+        time.sleep(2.5)
+        return page, temp_user_data, save_dir
+
+    def crawl_all_stocks_session(
+        self,
+        stock_codes: List[str],
+        trade_date: str,
+        workers: int = 1
+    ) -> Tuple[List[pd.DataFrame], List[str]]:
+        """
+        使用單一持久化 Chromium 瀏覽器會話循序抓取全市場上櫃股票 (規避 Cloudflare 限流，100% 穩定零漏抓)
+        每 4 分鐘主動 hard-restart Chromium (Cloudflare Turnstile Token 5 分鐘過期)；連續 3 檔失敗亦強制重建。
+        """
+        try:
+            from DrissionPage import ChromiumPage, ChromiumOptions  # noqa: F401
+        except ImportError:
+            print("[!] 未安裝 DrissionPage，請執行 pip install DrissionPage")
+            return [], stock_codes
+
+        # Cloudflare Turnstile Token 約 5 分鐘過期，提前 1 分鐘 (240s) 主動換 session。
+        SESSION_MAX_SEC = 240
+        MAX_CONSECUTIVE_MISS = 3
+        BASE_PORT = 9333
+
         page = None
+        temp_user_data = None
+        save_dir = None
         collected_dfs = []
         failed_symbols = []
         total = len(stock_codes)
         start_t = time.time()
+        restart_counter = 0
+
+        def _cleanup_session():
+            nonlocal page, temp_user_data, save_dir
+            if page:
+                try: page.quit()
+                except Exception: pass
+                page = None
+            if temp_user_data:
+                shutil.rmtree(temp_user_data, ignore_errors=True)
+                temp_user_data = None
+            if save_dir:
+                shutil.rmtree(save_dir, ignore_errors=True)
+                save_dir = None
+
+        def _restart_session(reason: str):
+            nonlocal page, temp_user_data, save_dir, restart_counter
+            _cleanup_session()
+            restart_counter += 1
+            port = BASE_PORT + restart_counter
+            ts = get_taipei_now().strftime("%H:%M:%S")
+            print(f"[{ts}] [*] Hard-restart TPEX Chromium session #{restart_counter} (port={port}) — 原因: {reason}")
+            sys.stdout.flush()
+            page, temp_user_data, save_dir = self._launch_tpex_browser_session(port)
 
         try:
             print(f"[*] 正在啟動 TPEX 單一持久化極速引擎 (待抓取: {total} 檔)...")
-            page = ChromiumPage(addr_or_opts=co)
-            page.set.download_path(save_dir)
-            try:
-                page.download.set.show_msg(False)
-            except Exception:
-                pass
-            page.get(self.TPEX_URL, retry=3, timeout=25)
-            time.sleep(2.5)
-
+            page, temp_user_data, save_dir = self._launch_tpex_browser_session(BASE_PORT)
+            session_start = time.time()
             consecutive_misses = 0
 
             for idx, sym in enumerate(stock_codes, 1):
+                # Turnstile Token 即將過期 → 主動 hard-restart 避開失敗
+                if time.time() - session_start >= SESSION_MAX_SEC:
+                    _restart_session(f"session 已使用 {int(time.time() - session_start)}s (>= {SESSION_MAX_SEC}s)")
+                    session_start = time.time()
+                    consecutive_misses = 0
+
                 try:
                     # 清空暫存目錄下的所有舊 CSV
                     for old_f in glob.glob(os.path.join(save_dir, "*.csv")):
@@ -459,36 +504,43 @@ class TPEXBrokerCrawler:
                             if found_csv:
                                 break
 
-                    # 若連續累積多次找不到 (代表 Session 異常)，執行深度重載並等待驗證完成
-                    if not found_csv:
-                        consecutive_misses += 1
-                        if consecutive_misses >= 3:
-                            page.get(self.TPEX_URL, retry=2, timeout=20)
-                            time.sleep(4.0)
-                            consecutive_misses = 0
-                    else:
-                        consecutive_misses = 0
-
                     ts_res = get_taipei_now().strftime("%H:%M:%S")
                     if found_csv and os.path.exists(found_csv):
                         df = self.parse_tpex_csv_to_dataframe(found_csv, sym, trade_date)
                         if df is not None and not df.empty:
                             collected_dfs.append(df)
+                            consecutive_misses = 0
                             elapsed = time.time() - start_t
                             speed = idx / elapsed if elapsed > 0 else 0
                             remain = (total - idx) / speed if speed > 0 else 0
                             print(f"[{ts_res}]   [上櫃 {idx}/{total}] [OK] {sym} ({len(df)} 筆) | 速度: {speed:.2f} 檔/s | 剩餘約: {remain/60:.1f} 分鐘")
                         else:
                             failed_symbols.append(sym)
+                            consecutive_misses += 1
                             print(f"[{ts_res}]   [上櫃 {idx}/{total}] [無資料/略過] {sym}")
                     else:
                         failed_symbols.append(sym)
+                        consecutive_misses += 1
                         print(f"[{ts_res}]   [上櫃 {idx}/{total}] [無資料/略過] {sym}")
+
+                    # 連續失敗閾值到達 → 立即 hard-restart (Turnstile Token 疑似失效)
+                    if consecutive_misses >= MAX_CONSECUTIVE_MISS:
+                        _restart_session(f"連續 {consecutive_misses} 檔失敗")
+                        session_start = time.time()
+                        consecutive_misses = 0
 
                 except Exception as e:
                     ts_err = get_taipei_now().strftime("%H:%M:%S")
                     failed_symbols.append(sym)
+                    consecutive_misses += 1
                     print(f"[{ts_err}]   [上櫃 {idx}/{total}] [異常] {sym} ({e})")
+                    if consecutive_misses >= MAX_CONSECUTIVE_MISS:
+                        try:
+                            _restart_session(f"連續 {consecutive_misses} 檔異常")
+                            session_start = time.time()
+                            consecutive_misses = 0
+                        except Exception as re:
+                            print(f"[!] Hard-restart 失敗: {re}")
 
                 sys.stdout.flush()
 
@@ -497,12 +549,6 @@ class TPEXBrokerCrawler:
             print(f"[!] TPEX 瀏覽器批次引擎異常: {e}")
             traceback.print_exc()
         finally:
-            if page:
-                try:
-                    page.quit()
-                except Exception:
-                    pass
-            shutil.rmtree(temp_user_data, ignore_errors=True)
-            shutil.rmtree(save_dir, ignore_errors=True)
+            _cleanup_session()
 
         return collected_dfs, failed_symbols
