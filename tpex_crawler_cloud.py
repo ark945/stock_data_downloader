@@ -259,7 +259,19 @@ class TPEXCloudCrawler:
                     q_btn = page.ele("css:.btn-query", timeout=2) or page.ele("text:查詢", timeout=2)
                     if q_btn:
                         q_btn.click(by_js=True)
-                        time.sleep(1.0)
+
+                    # 激活並等待 Turnstile 注入合法 Token 到隱藏表單
+                    try:
+                        page.run_js("if (typeof turnstile !== 'undefined') { turnstile.execute(); }")
+                        for _ in range(12):
+                            time.sleep(0.15)
+                            tok = page.run_js("return document.querySelector('[name=cf-turnstile-response]') ? document.querySelector('[name=cf-turnstile-response]').value : '';")
+                            if tok and len(tok) > 10:
+                                break
+                    except Exception:
+                        pass
+
+                    time.sleep(0.5)
 
                     d_btn = page.ele("text:下載 CSV", timeout=2.5) or page.ele("text:下載 CSV (UTF-8)", timeout=1.5)
                     if not d_btn:

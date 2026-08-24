@@ -92,6 +92,12 @@ def _mp_local_worker_task(
 
         page.get(tpex_url, retry=3, timeout=30)
         time.sleep(3.0)
+        # 啟動預熱 Cloudflare Turnstile 驗證
+        try:
+            page.run_js("if (typeof turnstile !== 'undefined') { turnstile.execute(); }")
+            time.sleep(1.5)
+        except Exception:
+            pass
 
         for idx, sym in enumerate(symbols, 1):
             try:
@@ -106,20 +112,24 @@ def _mp_local_worker_task(
                 if "brokerBS.html" not in cur_url or "520" in cur_title or "Error" in cur_title or "unknown error" in cur_title:
                     page.get(tpex_url, retry=3, timeout=25)
                     time.sleep(3.0)
+                    try: page.run_js("if (typeof turnstile !== 'undefined') { turnstile.execute(); }")
+                    except Exception: pass
 
                 stk_input = page.ele("css:input.code", timeout=4) or page.ele("@name=code", timeout=4)
                 if not stk_input:
                     page.get(tpex_url, retry=2, timeout=20)
                     time.sleep(2.5)
+                    try: page.run_js("if (typeof turnstile !== 'undefined') { turnstile.execute(); }")
+                    except Exception: pass
                     stk_input = page.ele("css:input.code", timeout=5) or page.ele("@name=code", timeout=5)
                     if not stk_input:
                         failed_symbols.append(sym)
                         continue
 
                 stk_input.input(sym, clear=True, by_js=True)
-                time.sleep(0.3)
+                time.sleep(0.2)
 
-                # 3. 點擊日報表 [查詢] 按鈕
+                # 3. 點擊日報表 [查詢] 按鈕並激活 Turnstile Token
                 q_btn = page.ele("xpath://div[contains(@class,'formblock')]//button[contains(text(),'查詢')]") or page.ele("css:form.formblock button[type=submit]") or page.ele("text:查詢")
                 if q_btn:
                     try: q_btn.click(by_js=True)
@@ -127,8 +137,18 @@ def _mp_local_worker_task(
                         try: q_btn.click()
                         except Exception: pass
 
-                # 等待查詢載入
-                time.sleep(1.2)
+                # 激活並等待 Turnstile 注入合法 Token 到隱藏表單
+                try:
+                    page.run_js("if (typeof turnstile !== 'undefined') { turnstile.execute(); }")
+                    for _ in range(12):
+                        time.sleep(0.15)
+                        tok = page.run_js("return document.querySelector('[name=cf-turnstile-response]') ? document.querySelector('[name=cf-turnstile-response]').value : '';")
+                        if tok and len(tok) > 10:
+                            break
+                except Exception:
+                    pass
+
+                time.sleep(0.5)
 
                 # 4. 點擊 [下載 CSV (UTF-8)] 按鈕 (全量數據)
                 d_btn = page.ele("xpath://button[contains(text(),'UTF-8')]") or page.ele("text:下載 CSV (UTF-8)") or page.ele("text:下載 CSV")
@@ -140,8 +160,8 @@ def _mp_local_worker_task(
                         except Exception: pass
 
                     found_csv = None
-                    for _ in range(16):
-                        time.sleep(0.4)
+                    for _ in range(14):
+                        time.sleep(0.3)
                         if glob.glob(os.path.join(save_dir, "*.crdownload")):
                             continue
                         candidates = [f for f in glob.glob(os.path.join(save_dir, "*.csv")) if os.path.getsize(f) > 30]
