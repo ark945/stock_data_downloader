@@ -33,6 +33,7 @@ def test_google_drive_connection():
     print(f"[*] 偵測到 GDRIVE_FOLDER_ID: {masked_folder}")
 
     # 模式 A: Google Apps Script Web App (推薦個人 Gmail 模式)
+    gas_error = None
     if gas_url:
         print("\n[*] 💡 檢測到 【Google Apps Script Web App】 模式 (個人 Google 帳號推薦)")
         masked_url = gas_url[:25] + "..." + gas_url[-8:] if len(gas_url) > 35 else gas_url
@@ -59,12 +60,12 @@ def test_google_drive_connection():
             session = requests.Session()
             resp = session.post(gas_url, json=payload, headers={"Content-Type": "application/json"}, timeout=40, allow_redirects=True)
             if resp.status_code == 200:
+                res_json = None
                 try:
                     res_json = resp.json()
                 except Exception:
-                    print(f"❌ [失敗] GAS 回傳內容非 JSON: {resp.text[:300]}")
-                    sys.exit(1)
-                if res_json.get("status") == "success":
+                    gas_error = f"GAS 回傳內容非 JSON: {resp.text[:300]}"
+                if res_json and res_json.get("status") == "success":
                     print(f"  [✓] 測試檔案上傳成功！")
                     print(f"  [✓] 檔案 ID: {res_json.get('file_id')}")
                     print(f"  [✓] 檢視連結: {res_json.get('url')}")
@@ -74,15 +75,19 @@ def test_google_drive_connection():
                     print("=" * 60)
                     return
                 else:
-                    print(f"❌ [失敗] GAS 回傳錯誤: {res_json.get('message')}")
-                    print("💡 請確認 Google Apps Script 中的 folder_id 是否正確。")
-                    sys.exit(1)
+                    gas_error = f"GAS 回傳錯誤: {res_json.get('message')}"
             else:
-                print(f"❌ [失敗] GAS 連線失敗 (HTTP {resp.status_code}): {resp.text}")
-                sys.exit(1)
+                gas_error = f"GAS 連線失敗 (HTTP {resp.status_code}): {resp.text[:300]}"
         except Exception as e:
-            print(f"❌ [失敗] 發送請求至 GAS 失敗: {e}")
-            sys.exit(1)
+            gas_error = f"發送請求至 GAS 失敗: {e}"
+
+        if gas_error:
+            print(f"⚠️ [警告] {gas_error}")
+            if raw_key:
+                print("[*] 將改用 Service Account 模式再次驗證寫入權限...")
+            else:
+                print("💡 請確認 Google Apps Script Web App 已部署為可匿名存取，或改用 Service Account 模式。")
+                sys.exit(1)
 
     # 模式 B: Service Account 模式
     if raw_key:
@@ -136,7 +141,10 @@ def test_google_drive_connection():
             print(f"❌ [失敗] Service Account 操作失敗: {e}")
             sys.exit(1)
 
-    print("❌ [失敗] 未設定 GDRIVE_UPLOAD_URL 或 GDRIVE_SERVICE_ACCOUNT_KEY！")
+    if gas_error:
+        print(f"❌ [失敗] GAS 測試失敗，且 Service Account 模式未成功: {gas_error}")
+    else:
+        print("❌ [失敗] 未設定 GDRIVE_UPLOAD_URL 或 GDRIVE_SERVICE_ACCOUNT_KEY！")
     sys.exit(1)
 
 

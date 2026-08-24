@@ -70,7 +70,7 @@ def upload_via_gas(local_file_path: str, upload_url: str, folder_id: str) -> Opt
                 print(f"[!] Google Apps Script 回傳錯誤: {res_data.get('message')}")
                 return None
         else:
-            print(f"[!] GAS 連線失敗 (HTTP {resp.status_code}): {resp.text}")
+            print(f"[!] GAS 連線失敗 (HTTP {resp.status_code}): {resp.text[:300]}")
             return None
 
     except Exception as e:
@@ -146,7 +146,10 @@ def upload_file_to_gdrive(
     # 優先嘗試 1：Google Apps Script Web App 模式 (推薦，個人帳號無 quota 限制)
     gas_url = os.environ.get("GDRIVE_UPLOAD_URL", "").strip()
     if gas_url:
-        return upload_via_gas(local_file_path, gas_url, target_folder)
+        gas_result = upload_via_gas(local_file_path, gas_url, target_folder)
+        if gas_result:
+            return gas_result
+        print("[*] GAS 模式未成功，改用 Service Account 模式重試...")
 
     # 優先嘗試 2：Google Cloud Service Account 模式
     service = get_gdrive_service(service_account_key)
