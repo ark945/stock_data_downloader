@@ -95,10 +95,12 @@ def _mp_local_worker_task(
         for idx, sym in enumerate(symbols, 1):
             try:
                 # 1. 清空舊 CSV
-                # 1. 確保在 BrokerBS 頁面 (若誤跳頁則自動導回)
-                if "brokerBS.html" not in page.url:
-                    page.get(tpex_url, retry=2, timeout=20)
-                    time.sleep(2.5)
+                # 1. 頁面健康檢查與 520/500/跳頁自動自癒導回
+                cur_url = page.url or ""
+                cur_title = page.title or ""
+                if "brokerBS.html" not in cur_url or "520" in cur_title or "Error" in cur_title or "unknown error" in cur_title:
+                    page.get(tpex_url, retry=3, timeout=25)
+                    time.sleep(3.0)
 
                 # 每次動態重新獲取輸入框
                 stk_input = page.ele("css:input.code", timeout=5) or page.ele("@name=code", timeout=5)
@@ -111,9 +113,9 @@ def _mp_local_worker_task(
                         continue
 
                 stk_input.input(sym, clear=True, by_js=True)
-                time.sleep(0.4)
+                time.sleep(0.3)
 
-                # 2. 點擊日報表 [查詢] 按鈕 (排除頂部全站搜尋)
+                # 2. 點擊日報表 [查詢] 按鈕
                 q_btn = page.ele("xpath://div[contains(@class,'formblock')]//button[contains(text(),'查詢')]") or page.ele("xpath://button[text()='查詢']") or page.ele("text:查詢")
                 if q_btn:
                     try: q_btn.click(by_js=True)
@@ -122,7 +124,16 @@ def _mp_local_worker_task(
                         except Exception: pass
 
                 # 等待查詢載入完成
-                time.sleep(1.3)
+                time.sleep(1.2)
+
+                # 檢查是否遭遇 520 伺服器錯誤
+                if "520" in (page.title or "") or "Error" in (page.title or ""):
+                    ts_err = datetime.now().strftime("%H:%M:%S")
+                    print(f"[{ts_err}]   [Worker-{worker_id} {idx}/{worker_total}] [TPEX 520 伺服器過載] {sym} ➔ 自動排入第2輪補抓")
+                    failed_symbols.append(sym)
+                    page.get(tpex_url, retry=2, timeout=20)
+                    time.sleep(2.0)
+                    continue
 
                 # 3. 點擊 [下載 CSV (UTF-8)] 按鈕
                 d_btn = page.ele("xpath://button[contains(text(),'UTF-8')]") or page.ele("text:下載 CSV (UTF-8)") or page.ele("text:下載 CSV")
@@ -159,6 +170,9 @@ def _mp_local_worker_task(
                 else:
                     ts_btn = datetime.now().strftime("%H:%M:%S")
                     print(f"[{ts_btn}]   [Worker-{worker_id} {idx}/{worker_total}] [查無資料/無按鈕] {sym}")
+
+                # 自然錯開請求間隔，防止瞬間撞擊 TPEX 後端
+                time.sleep(0.4)
 
             except Exception as e:
                 ts_err = datetime.now().strftime("%H:%M:%S")
