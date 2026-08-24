@@ -195,71 +195,49 @@ class TPEXBrokerCrawler:
     @staticmethod
     def get_all_tpex_symbols() -> List[str]:
         """
-        取得目前所有上櫃（TPEx）股票與 ETF 代碼清單 (精確排除 9,500+ 檔 6 碼權證)
+        取得目前所有上櫃（TPEx）股票與 ETF 代碼清單 (優先將 4 碼主流個股排在前，冷門債券 ETF 排在後)
         """
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         }
+        raw_symbols = []
         # 策略 1: TPEX OpenAPI 每日收盤行情
         try:
             url = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes"
             r = requests.get(url, headers=headers, timeout=10)
             if r.status_code == 200:
                 data = r.json()
-                stock_symbols = []
                 for item in data:
                     code = str(item.get("SecuritiesCompanyCode", "")).strip()
-                    # 篩選 4 碼個股 (如 6488)、特別股 (如 8349A) 或上櫃 ETF (如 00720B)，排除 6 碼權證 (如 734294)
                     if re.match(r"^[0-9]{4}[A-Za-z]?$", code) or re.match(r"^00[0-9]{3}[A-Za-z0-9]?$", code):
-                        stock_symbols.append(code)
-                if len(stock_symbols) > 300:
-                    return sorted(list(dict.fromkeys(stock_symbols)))
+                        raw_symbols.append(code)
         except Exception:
             pass
 
         # 策略 2: 傳統 TPEX API
-        try:
-            url = "https://www.tpex.org.tw/web/stock/aftertrading/otc_quotes_no1430/stk_wn1430_result.php?l=zh-tw&o=json"
-            r = requests.get(url, headers=headers, timeout=10)
-            if r.status_code == 200:
-                data = r.json()
-                tables = data.get("aaData", [])
-                stock_symbols = []
-                for row in tables:
-                    if len(row) > 0:
-                        code = str(row[0]).strip()
-                        if re.match(r"^[0-9]{4}[A-Za-z]?$", code) or re.match(r"^00[0-9]{3}[A-Za-z0-9]?$", code):
-                            stock_symbols.append(code)
-                if len(stock_symbols) > 300:
-                    return sorted(list(dict.fromkeys(stock_symbols)))
-        except Exception:
-            pass
-
-        # 策略 3: 官方證券編碼彙總表 (ISIN - 包含所有上櫃股票與 ETF，全年無休最穩定)
-        try:
-            from bs4 import BeautifulSoup
-            url = "https://isin.twse.com.tw/isin/C_public.jsp?strMode=4"
-            r = requests.get(url, headers=headers, timeout=10)
-            if r.status_code == 200:
-                r.encoding = "big5"
-                soup = BeautifulSoup(r.text, "html.parser")
-                stock_symbols = []
-                for row in soup.find_all("tr"):
-                    tds = row.find_all("td")
-                    if len(tds) > 0:
-                        txt = tds[0].text.strip()
-                        parts = txt.split()
-                        if len(parts) >= 2:
-                            code = parts[0]
+        if not raw_symbols:
+            try:
+                url = "https://www.tpex.org.tw/web/stock/aftertrading/otc_quotes_no1430/stk_wn1430_result.php?l=zh-tw&o=json"
+                r = requests.get(url, headers=headers, timeout=10)
+                if r.status_code == 200:
+                    data = r.json()
+                    for row in data.get("aaData", []):
+                        if len(row) > 0:
+                            code = str(row[0]).strip()
                             if re.match(r"^[0-9]{4}[A-Za-z]?$", code) or re.match(r"^00[0-9]{3}[A-Za-z0-9]?$", code):
-                                stock_symbols.append(code)
-                if len(stock_symbols) > 300:
-                    return sorted(list(dict.fromkeys(stock_symbols)))
-        except Exception:
-            pass
+                                raw_symbols.append(code)
+            except Exception:
+                pass
 
-        # 預設常見上櫃指標股
-        return ["6488", "6117", "3293", "8069", "5483", "3131", "6274", "3529", "8299", "6180"]
+        if not raw_symbols:
+            raw_symbols = ["6488", "6117", "3293", "8069", "5483", "3131", "6274", "3529", "8299", "6180"]
+
+        unique_symbols = sorted(list(dict.fromkeys(raw_symbols)))
+        # 智慧排序：4 碼主流個股 (1xxx~8xxx) 排在最前面，00 開頭的債券 ETF/特別股排在最後面
+        common_stocks = [s for s in unique_symbols if re.match(r"^[1-9][0-9]{3}[A-Za-z]?$", s)]
+        etf_and_bonds = [s for s in unique_symbols if s.startswith("00") or s not in common_stocks]
+
+        return common_stocks + etf_and_bonds
 
     def _find_downloaded_csv(self, stock_code: str, search_dir: str) -> Optional[str]:
         patterns = [
