@@ -298,35 +298,35 @@ def run_quick_test():
         subprocess.run([sys.executable, "test_notify.py"])
     elif choice == "3":
         print("\n[*] 正在測試上市 (TWSE) 2330 採集...")
-        subprocess.run([sys.executable, "stock_crawler_coordinator.py", "--market", "twse", "--workers", "1", "--max-rounds", "1"])
+        subprocess.run([sys.executable, "-c", "from twse_bsr_crawler import TWSEBrokerCrawler; c = TWSEBrokerCrawler(); df, f, r = c.crawl_stocks(['2330'], '2026-08-21'); print('抓取結果:', len(df), '筆')"])
     elif choice == "4":
-        print("\n[*] 正在測試上櫃 (TPEX) 採集...")
-        subprocess.run([sys.executable, "stock_crawler_coordinator.py", "--market", "tpex"])
+        print("\n[*] 正在測試上櫃 (TPEX) 6488 採集...")
+        subprocess.run([sys.executable, "-c", "from tpex_bsr_crawler import TPEXBrokerCrawler; c = TPEXBrokerCrawler(); df, f = c.crawl_stocks_with_retry(['6488'], '2026-08-21'); print('抓取結果:', len(df), '筆')"])
 
 
 def run_crawler_menu():
     """執行爬蟲任務選單"""
     print("\n🚀 選擇爬蟲任務：")
-    print("  1. 一鍵採集全市場 (上市 + 上櫃) [最新交易日]")
+    print("  1. 一鍵採集全市場 (上市 + 上櫃) [最新交易日, 預設 6-Workers 極速並行]")
     print("  2. 一鍵採集全市場 (極速模式，僅產出 Parquet 不出 Excel)")
     print("  3. 僅採集上市股票 (TWSE)")
-    print("  4. 僅採集上櫃股票 (TPEX)")
+    print("  4. 僅採集上櫃股票 (TPEX 6-Workers 極速並行)")
     print("  5. 指定歷史日期採集 (例如 2026-08-21)")
     print("  0. 返回主選單")
 
     c = input("\n請輸入選項 (0-5) > ").strip()
     if c == "1":
-        subprocess.run([sys.executable, "stock_crawler_coordinator.py", "--market", "all"])
+        subprocess.run([sys.executable, "stock_crawler_coordinator.py", "--market", "all", "--workers", "6"])
     elif c == "2":
-        subprocess.run([sys.executable, "stock_crawler_coordinator.py", "--market", "all", "--no-excel"])
+        subprocess.run([sys.executable, "stock_crawler_coordinator.py", "--market", "all", "--workers", "6", "--no-excel"])
     elif c == "3":
-        subprocess.run([sys.executable, "stock_crawler_coordinator.py", "--market", "twse", "--workers", "6"])
+        subprocess.run([sys.executable, "stock_crawler_coordinator.py", "--market", "twse", "--workers", "8"])
     elif c == "4":
-        subprocess.run([sys.executable, "stock_crawler_coordinator.py", "--market", "tpex"])
+        subprocess.run([sys.executable, "stock_crawler_coordinator.py", "--market", "tpex", "--workers", "6"])
     elif c == "5":
         date_str = input("請輸入指定日期 (YYYY-MM-DD) > ").strip()
         if date_str:
-            subprocess.run([sys.executable, "stock_crawler_coordinator.py", "--date", date_str, "--market", "all"])
+            subprocess.run([sys.executable, "stock_crawler_coordinator.py", "--date", date_str, "--market", "all", "--workers", "6"])
 
 
 def main():
