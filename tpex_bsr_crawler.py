@@ -108,26 +108,14 @@ def _mp_tpex_worker_task(
                         pass
 
                 if not q_btn:
-                    q_btn = page.ele("css:.btn-query", timeout=1) or page.ele("text:查詢", timeout=1)
+                    q_btn = page.ele("css:.btn-query", timeout=2) or page.ele("text:查詢", timeout=2)
 
                 if q_btn:
                     q_btn.click(by_js=True)
-                    time.sleep(0.8)
+                    time.sleep(1.0)
 
-                # 2. 檢測無交易標的
-                no_data = False
-                for kw in ["查無符合資料", "無符合條件", "本日無交易", "查無資料", "沒有符合"]:
-                    if page.ele(f"text:{kw}", timeout=0.3):
-                        no_data = True
-                        break
-
-                if no_data:
-                    ts_nd = datetime.now().strftime("%H:%M:%S")
-                    print(f"[{ts_nd}]   [W{worker_id} {idx}/{worker_total}] [無交易/略過] {sym}")
-                    sys.stdout.flush()
-                    continue
-
-                d_btn = page.ele("text:下載 CSV", timeout=1.5) or page.ele("text:下載 CSV (UTF-8)", timeout=1.2)
+                # 2. 精準判斷：直接以實體「下載 CSV」按鈕作為唯一存在性依據 (絕不模糊匹配文字)
+                d_btn = page.ele("text:下載 CSV", timeout=2.5) or page.ele("text:下載 CSV (UTF-8)", timeout=1.5)
                 if d_btn:
                     try:
                         d_btn.click(by_js=True)
@@ -136,8 +124,8 @@ def _mp_tpex_worker_task(
                         except Exception: pass
 
                     found_csv = None
-                    for _ in range(8):
-                        time.sleep(0.4)
+                    for _ in range(12):
+                        time.sleep(0.5)
                         if glob.glob(os.path.join(save_dir, "*.crdownload")):
                             continue
                         candidates = [f for f in glob.glob(os.path.join(save_dir, "*.csv")) if os.path.getsize(f) > 30]
@@ -157,10 +145,10 @@ def _mp_tpex_worker_task(
                         except OSError: pass
                     else:
                         failed_symbols.append(sym)
-                        print(f"[{ts_res}]   [W{worker_id} {idx}/{worker_total}] [無資料/略過] {sym}")
+                        print(f"[{ts_res}]   [W{worker_id} {idx}/{worker_total}] [下載超時] {sym}")
                 else:
                     ts_btn = datetime.now().strftime("%H:%M:%S")
-                    print(f"[{ts_btn}]   [W{worker_id} {idx}/{worker_total}] [無交易/略過] {sym}")
+                    print(f"[{ts_btn}]   [W{worker_id} {idx}/{worker_total}] [查無資料/無按鈕] {sym}")
 
             except Exception as e:
                 ts_err = datetime.now().strftime("%H:%M:%S")
@@ -537,30 +525,17 @@ class TPEXBrokerCrawler:
                         continue
 
                     q_btn.click(by_js=True)
-                    time.sleep(1.2)
-
-                    # 1. 快速檢測頁面是否提示「查無資料 / 本日無交易」
-                    no_data = False
-                    for kw in ["查無符合資料", "無符合條件", "本日無交易", "查無資料", "沒有符合", "無此股票"]:
-                        if page.ele(f"text:{kw}", timeout=0.5):
-                            no_data = True
-                            break
-
-                    if no_data:
-                        ts_nd = get_taipei_now().strftime("%H:%M:%S")
-                        consecutive_misses = 0
-                        print(f"[{ts_nd}]   [上櫃 {idx}/{total}] [無交易/略過] {sym}")
-                        sys.stdout.flush()
-                        continue
+                    time.sleep(1.0)
 
                     found_csv = None
                     reason = ""
 
+                    # 直接尋找實體下載按鈕 (精確判斷，絕不全域模糊搜文字)
                     d_btn = page.ele("text:下載 CSV", timeout=2.5) or page.ele("text:下載 CSV (UTF-8)", timeout=1.5)
                     if not d_btn:
                         ts_nd = get_taipei_now().strftime("%H:%M:%S")
                         consecutive_misses = 0
-                        print(f"[{ts_nd}]   [上櫃 {idx}/{total}] [無交易/略過] {sym}")
+                        print(f"[{ts_nd}]   [上櫃 {idx}/{total}] [查無資料/無按鈕] {sym}")
                         sys.stdout.flush()
                         continue
 
