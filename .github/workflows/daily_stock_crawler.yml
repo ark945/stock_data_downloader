@@ -6,8 +6,8 @@ env:
 
 on:
   schedule:
-    # 每週一至週五 台灣時間 20:30 (UTC 12:30)
-    - cron: "30 12 * * 1-5"
+    # 每週一至週五 台灣時間 60:30 (UTC 12:30)
+    - cron: "30 08 * * 1-5"
   workflow_dispatch:
     inputs:
       target_date:
