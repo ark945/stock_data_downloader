@@ -519,7 +519,6 @@ class TPEXBrokerCrawler:
                         continue
 
                     q_btn.click(by_js=True)
-                    # 等 AJAX 回結果 (原本 0.5s 太短，查詢還沒完成就點下載會拿到空檔)
                     time.sleep(2.5)
 
                     found_csv = None
@@ -529,9 +528,15 @@ class TPEXBrokerCrawler:
                     if not d_btn:
                         reason = "下載鈕缺失"
                     else:
+                        # 攔截 XHR 直接拿 CSV bytes，避開 browser download (在 CF challenge 下會靜默失敗)
+                        try:
+                            page.listen.start(targets="brokerBS", method="GET", res_type=True)
+                        except Exception:
+                            pass
+                        dl_ret = None
                         clicked_ok = False
                         try:
-                            d_btn.click.to_download(save_path=save_dir, rename=f"{sym}.csv")
+                            dl_ret = d_btn.click.to_download(save_path=save_dir, rename=f"{sym}.csv", timeout=10)
                             clicked_ok = True
                         except Exception as e_dl:
                             reason = f"to_download 例外: {type(e_dl).__name__}"
@@ -540,14 +545,39 @@ class TPEXBrokerCrawler:
                                 clicked_ok = True
                             except Exception:
                                 pass
-                        if clicked_ok:
+
+                        # 嘗試從 listener 攔到 response
+                        try:
+                            packet = page.listen.wait(timeout=8)
+                            if packet and packet.response and packet.response.body:
+                                body = packet.response.body
+                                if isinstance(body, str):
+                                    body_bytes = body.encode("utf-8", errors="ignore")
+                                else:
+                                    body_bytes = bytes(body)
+                                if len(body_bytes) > 200 and b"challenge-platform" not in body_bytes[:2000]:
+                                    csv_path = os.path.join(save_dir, f"{sym}.csv")
+                                    with open(csv_path, "wb") as fp:
+                                        fp.write(body_bytes)
+                                    found_csv = csv_path
+                                elif b"challenge-platform" in body_bytes[:2000] or b"Just a moment" in body_bytes[:2000]:
+                                    reason = "CF challenge 攔截 (IP 已被 flag)"
+                        except Exception:
+                            pass
+                        try:
+                            page.listen.stop()
+                        except Exception:
+                            pass
+
+                        if not found_csv and clicked_ok:
+                            # 退回檔案輪詢
                             for _ in range(16):
                                 time.sleep(0.5)
                                 found_csv = self._find_downloaded_csv(sym, save_dir)
                                 if found_csv:
                                     break
                             if not found_csv and not reason:
-                                reason = "下載 8s 未見檔"
+                                reason = f"下載無回應 (to_download return={dl_ret!r})"
 
                     ts_res = get_taipei_now().strftime("%H:%M:%S")
                     if found_csv and os.path.exists(found_csv):
