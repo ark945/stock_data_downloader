@@ -155,23 +155,62 @@ def _mp_local_worker_task(
                             break
 
                     ts_res = datetime.now().strftime("%H:%M:%S")
+                    df = None
                     if found_csv and os.path.exists(found_csv):
                         df = crawler.parse_tpex_csv_to_dataframe(found_csv, sym, trade_date)
-                        if df is not None and not df.empty:
-                            collected_dfs.append(df)
-                            print(f"[{ts_res}]   [Worker-{worker_id} {idx}/{worker_total}] [OK] {sym} ({len(df)} 筆)")
-                        else:
-                            print(f"[{ts_res}]   [Worker-{worker_id} {idx}/{worker_total}] [無成交/略過] {sym}")
                         try: os.remove(found_csv)
                         except OSError: pass
+
+                    # 若 CSV 下載為 0B 或解析為空，自動啟用 DOM 表格原生提取 Fallback
+                    if df is None or df.empty:
+                        rows = page.eles("css:table tbody tr", timeout=2)
+                        if rows and len(rows) > 0:
+                            dom_data = []
+                            for r in rows:
+                                tds = [td.text.strip() for td in r.eles("tag:td")]
+                                if len(tds) >= 5:
+                                    # 序號, 券商, 價格, 買進股數, 賣出股數
+                                    b_info = tds[1].split()
+                                    b_id = b_info[0] if b_info else "0000"
+                                    try:
+                                        p_val = float(tds[2].replace(",", ""))
+                                        b_vol = float(tds[3].replace(",", ""))
+                                        s_vol = float(tds[4].replace(",", ""))
+                                        dom_data.append({
+                                            "symbol": str(sym),
+                                            "trade_date": str(trade_date),
+                                            "broker_id": str(b_id),
+                                            "buy_vol": b_vol,
+                                            "sell_vol": s_vol,
+                                            "net_vol": b_vol - s_vol,
+                                            "buy_amt": (b_vol * p_val) / 1000.0,
+                                            "sell_amt": (s_vol * p_val) / 1000.0,
+                                            "net_amt": ((b_vol - s_vol) * p_val) / 1000.0,
+                                            "buy_avg_price": p_val if b_vol > 0 else np.nan,
+                                            "sell_avg_price": p_val if s_vol > 0 else np.nan,
+                                            "turnover": ((b_vol + s_vol) * p_val) / 1000.0,
+                                            "market_share": 0.0
+                                        })
+                                    except Exception:
+                                        pass
+                            if dom_data:
+                                df = pd.DataFrame(dom_data)
+
+                    if df is not None and not df.empty:
+                        collected_dfs.append(df)
+                        print(f"[{ts_res}]   [Worker-{worker_id} {idx}/{worker_total}] [OK] {sym} ({len(df)} 筆)")
                     else:
-                        failed_symbols.append(sym)
-                        print(f"[{ts_res}]   [Worker-{worker_id} {idx}/{worker_total}] [下載超時] {sym}")
+                        # 檢查是否當日真無成交
+                        has_trade = bool(page.ele("text:成交筆數", timeout=1)) or bool(page.ele("css:table tbody tr", timeout=1))
+                        if not has_trade:
+                            print(f"[{ts_res}]   [Worker-{worker_id} {idx}/{worker_total}] [無成交/略過] {sym}")
+                        else:
+                            failed_symbols.append(sym)
+                            print(f"[{ts_res}]   [Worker-{worker_id} {idx}/{worker_total}] [下載異常/待補抓] {sym}")
                 else:
                     ts_btn = datetime.now().strftime("%H:%M:%S")
                     print(f"[{ts_btn}]   [Worker-{worker_id} {idx}/{worker_total}] [查無資料/無按鈕] {sym}")
 
-                # 自然錯開請求間隔，防止瞬間撞擊 TPEX 後端
                 time.sleep(0.4)
 
             except Exception as e:
