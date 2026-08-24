@@ -523,14 +523,14 @@ class TPEXBrokerCrawler:
 
                     # 1. 快速檢測頁面是否提示「查無資料 / 本日無交易」
                     no_data = False
-                    for kw in ["查無符合資料", "無符合條件", "本日無交易", "查無資料", "沒有符合"]:
+                    for kw in ["查無符合資料", "無符合條件", "本日無交易", "查無資料", "沒有符合", "無此股票"]:
                         if page.ele(f"text:{kw}", timeout=0.5):
                             no_data = True
                             break
 
                     if no_data:
                         ts_nd = get_taipei_now().strftime("%H:%M:%S")
-                        consecutive_misses = 0  # 正常業務無資料，重置連續失敗計數
+                        consecutive_misses = 0
                         print(f"[{ts_nd}]   [上櫃 {idx}/{total}] [無交易/略過] {sym}")
                         sys.stdout.flush()
                         continue
@@ -538,65 +538,36 @@ class TPEXBrokerCrawler:
                     found_csv = None
                     reason = ""
 
-                    d_btn = page.ele("text:下載 CSV", timeout=2) or page.ele("text:下載 CSV (UTF-8)", timeout=1.5)
+                    d_btn = page.ele("text:下載 CSV", timeout=2.5) or page.ele("text:下載 CSV (UTF-8)", timeout=1.5)
                     if not d_btn:
-                        # 若無下載按鈕，再次確認是否無資料
-                        if page.ele("text:查無", timeout=0.5) or page.ele("text:無資料", timeout=0.5):
-                            ts_nd = get_taipei_now().strftime("%H:%M:%S")
-                            consecutive_misses = 0
-                            print(f"[{ts_nd}]   [上櫃 {idx}/{total}] [無交易/略過] {sym}")
-                            sys.stdout.flush()
+                        ts_nd = get_taipei_now().strftime("%H:%M:%S")
+                        consecutive_misses = 0
+                        print(f"[{ts_nd}]   [上櫃 {idx}/{total}] [無交易/略過] {sym}")
+                        sys.stdout.flush()
+                        continue
+
+                    # 2. 乾淨的原生點擊下載 (完全杜絕 page.listen CDP 死鎖)
+                    try:
+                        d_btn.click(by_js=True)
+                    except Exception:
+                        try:
+                            d_btn.click()
+                        except Exception as e_clk:
+                            reason = f"點擊失敗: {e_clk}"
+
+                    # 3. 穩定輪詢下載目錄中的 CSV 檔案 (最多 8 秒，0.5s * 16)
+                    for _ in range(16):
+                        time.sleep(0.5)
+                        # 檢查是否仍在下載 (.crdownload)
+                        if glob.glob(os.path.join(save_dir, "*.crdownload")) or glob.glob(os.path.join(save_dir, "*.tmp")):
                             continue
-                        reason = "下載鈕缺失"
-                    else:
-                        # 攔截 XHR 直接拿 CSV bytes
-                        try:
-                            page.listen.start(targets="brokerBS", method="GET", res_type=True)
-                        except Exception:
-                            pass
-                        dl_ret = None
-                        clicked_ok = False
-                        try:
-                            # 給予充裕的 8 秒等待，確保大資料量或雲端延遲能順利下載
-                            dl_ret = d_btn.click.to_download(save_path=save_dir, rename=f"{sym}.csv", timeout=8)
-                            clicked_ok = True
-                        except Exception as e_dl:
-                            reason = f"to_download 例外: {type(e_dl).__name__}"
-                            try:
-                                d_btn.click(by_js=True)
-                                clicked_ok = True
-                            except Exception:
-                                pass
+                        candidates = [f for f in glob.glob(os.path.join(save_dir, "*.csv")) if os.path.getsize(f) > 30]
+                        if candidates:
+                            found_csv = candidates[0]
+                            break
 
-                        # 嘗試從 listener 攔到 response (保留 6 秒充裕時間)
-                        try:
-                            packet = page.listen.wait(timeout=6)
-                            if packet and packet.response and packet.response.body:
-                                body = packet.response.body
-                                body_bytes = body.encode("utf-8", errors="ignore") if isinstance(body, str) else bytes(body)
-                                if len(body_bytes) > 50 and b"challenge-platform" not in body_bytes[:2000]:
-                                    csv_path = os.path.join(save_dir, f"{sym}.csv")
-                                    with open(csv_path, "wb") as fp:
-                                        fp.write(body_bytes)
-                                    found_csv = csv_path
-                                elif b"challenge-platform" in body_bytes[:2000] or b"Just a moment" in body_bytes[:2000]:
-                                    reason = "CF challenge 攔截"
-                        except Exception:
-                            pass
-                        try:
-                            page.listen.stop()
-                        except Exception:
-                            pass
-
-                        if not found_csv and clicked_ok:
-                            # 充裕的檔案輪詢 (8 秒：0.5s * 16 次)
-                            for _ in range(16):
-                                time.sleep(0.5)
-                                found_csv = self._find_downloaded_csv(sym, save_dir)
-                                if found_csv:
-                                    break
-                            if not found_csv and not reason:
-                                reason = f"下載無回應"
+                    if not found_csv and not reason:
+                        reason = "下載無回應"
 
                     ts_res = get_taipei_now().strftime("%H:%M:%S")
                     if found_csv and os.path.exists(found_csv):
@@ -609,28 +580,15 @@ class TPEXBrokerCrawler:
                             remain = (total - idx) / speed if speed > 0 else 0
                             print(f"[{ts_res}]   [上櫃 {idx}/{total}] [OK] {sym} ({len(df)} 筆) | 速度: {speed:.2f} 檔/s | 剩餘約: {remain/60:.1f} 分鐘")
                         else:
-                            # CSV 空或無資料亦視為無成交，不累計為 CF 錯誤
                             consecutive_misses = 0
                             print(f"[{ts_res}]   [上櫃 {idx}/{total}] [無成交明細/略過] {sym}")
                     else:
-                        if "CF challenge" in reason:
-                            failed_symbols.append(sym)
-                            consecutive_misses += 1
-                            print(f"[{ts_res}]   [上櫃 {idx}/{total}] [失敗: {reason}] {sym}")
-                        else:
-                            # 普通無回應可能是冷門股未成交
-                            failed_symbols.append(sym)
-                            print(f"[{ts_res}]   [上櫃 {idx}/{total}] [無資料/未產出] {sym}")
+                        failed_symbols.append(sym)
+                        print(f"[{ts_res}]   [上櫃 {idx}/{total}] [未產出: {reason}] {sym}")
 
-                    # 只有在真正遇到 Cloudflare 攔截連續 4 次時才重啟
-                    if consecutive_misses >= 4:
-                        if restart_counter >= MAX_RESTART_PER_ROUND:
-                            ts_abort = get_taipei_now().strftime("%H:%M:%S")
-                            print(f"[{ts_abort}] [!] 本 round 連續遇 CF 攔截，提前結束此輪交由重試 (剩餘 {total - idx} 檔跳過)")
-                            for skip_sym in stock_codes[idx:]:
-                                failed_symbols.append(skip_sym)
-                            break
-                        _restart_session(f"連續 {consecutive_misses} 檔遭 CF 攔截")
+                    # 4. 若頁面完全卡死或 crash 才進行重連，不因個別檔案無回應而輕易重啟
+                    if "crash" in reason.lower() or "disconnected" in reason.lower():
+                        _restart_session(f"瀏覽器異常: {reason}")
                         session_start = time.time()
                         consecutive_misses = 0
 
