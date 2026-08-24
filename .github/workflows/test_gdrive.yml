@@ -19,14 +19,15 @@ jobs:
           python-version: "3.12"
           cache: "pip"
 
-      - name: 安裝 Google Drive 官方 API 依賴
+      - name: 安裝 Python 依賴
         run: |
           python -m pip install --upgrade pip
-          pip install google-api-python-client google-auth
+          pip install requests google-api-python-client google-auth
 
       - name: 執行 Google Drive 連線與權限測試
         env:
           PYTHONIOENCODING: "utf-8"
+          GDRIVE_UPLOAD_URL: ${{ secrets.GDRIVE_UPLOAD_URL }}
           GDRIVE_SERVICE_ACCOUNT_KEY: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_KEY }}
           GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
         run: |

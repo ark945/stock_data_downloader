@@ -8,8 +8,9 @@
 
 | Secret 名稱 | 所屬功能模組 | 說明 | 申請管道與來源 |
 | :--- | :--- | :--- | :--- |
+| **`GDRIVE_UPLOAD_URL`** | 雲端備份 (推薦) | Google Apps Script (GAS) Web App 網址 (個人 Gmail 適用) | Google Apps Script 部署取得 |
 | **`GDRIVE_FOLDER_ID`** | 雲端備份 | Google Drive 存放 Parquet 資料庫的目標資料夾 ID | Google Drive 資料夾網址列 |
-| **`GDRIVE_SERVICE_ACCOUNT_KEY`** | 雲端備份 | Google Cloud 服務帳戶 (Service Account) 金鑰全文 | Google Cloud Console (JSON 檔) |
+| **`GDRIVE_SERVICE_ACCOUNT_KEY`** | 雲端備份 (選填) | Google Cloud 服務帳戶 (Service Account) 金鑰全文 | Google Cloud Console (JSON 檔) |
 | **`SMTP_USER`** | 郵件推播 | 寄送日報的 Gmail 信箱 | 您的 Google 帳號 Email |
 | **`SMTP_PASSWORD`** | 郵件推播 | Google 帳號之「應用程式密碼 (App Password)」 | Google 帳戶安全性設定 (16 位英文字) |
 | **`RECEIVER_EMAIL`** | 郵件推播 | 接收 HTML 視覺化日報的電子信箱 | 您欲收信的 Email（可與寄件者相同） |
