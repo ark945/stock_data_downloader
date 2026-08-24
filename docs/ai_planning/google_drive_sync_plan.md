@@ -6,8 +6,8 @@
 
 ## 🎯 目標 Google Drive 資料夾資訊
 
-* **目標資料夾連結**：[Google Drive 目標資料夾](https://drive.google.com/drive/folders/1L6f9jQx9phz_ZoVfDmBQViEVnoDHh_0a?usp=sharing)
-* **資料夾 ID (Folder ID)**：`1L6f9jQx9phz_ZoVfDmBQViEVnoDHh_0a`
+* **目標資料夾**：由使用者於 GitHub Secrets `GDRIVE_FOLDER_ID` 設定（例如 `1AbCDefGhIjKlMnOpQrStUvWxYz1234567`）
+* **資料夾 ID (Folder ID)**：`<YOUR_GDRIVE_FOLDER_ID>`
 
 ---
 
@@ -18,7 +18,7 @@ graph TD
     A[4-Runner 雲端分散式抓取完成] --> B[merge_shards.py 聚合全市場 Parquet]
     B --> C{檢查 Google Drive 設定}
     C -- 已配置 Service Account --> D[gdrive_sync.py 呼叫 Google Drive API]
-    D --> E[自動上傳至目標資料夾 1L6f9jQx9phz_ZoVfDmBQViEVnoDHh_0a]
+    D --> E[自動上傳至目標資料夾 GDRIVE_FOLDER_ID]
     E --> F[取得雲端檔案直連/分享連結]
     F --> G[推播 Telegram / Email 通知 (附帶 GDrive 連結)]
     C -- 未配置/略過 --> H[保留本機/Artifact 並發送標準通知]
@@ -32,7 +32,7 @@ graph TD
 * **職責**：封裝 Google Drive v3 API 操作。
 * **功能**：
   1. 支援從環境變數 `GDRIVE_SERVICE_ACCOUNT_KEY`（JSON 字串）或本機 `credentials.json` 進行身分驗證。
-  2. 自動上傳指定檔案至目標資料夾 `1L6f9jQx9phz_ZoVfDmBQViEVnoDHh_0a`。
+  2. 自動上傳指定檔案至由環境變數 `GDRIVE_FOLDER_ID` 指定的目標資料夾。
   3. 支援智慧覆蓋機制（若同日檔案已存在則自動更新版本，避免資料夾產生重複垃圾檔案）。
   4. 回傳檔案之 Google Drive 預覽/下載 URL。
 
@@ -43,7 +43,7 @@ graph TD
 ### 3. [MODIFY] `.github/workflows/daily_stock_crawler.yml`
 * 在 `merge-and-notify` Job 中注入 Google Drive 相關 Secrets：
   - `GDRIVE_SERVICE_ACCOUNT_KEY`
-  - `GDRIVE_FOLDER_ID`（預設為 `1L6f9jQx9phz_ZoVfDmBQViEVnoDHh_0a`）
+  - `GDRIVE_FOLDER_ID`（使用者自行貼上目標資料夾 ID）
 
 ### 4. [MODIFY] `requirements.txt`
 * 加入官方輕量依賴套件：
@@ -65,7 +65,7 @@ graph TD
    * 在「憑證 (Credentials)」建立一個**服務帳戶 (Service Account)**，並為其建立一組 **JSON 格式的金鑰**（下載該 JSON 檔案）。
 2. **分享資料夾給服務帳戶**：
    * 複製該服務帳戶的 Email（格式如 `xxx@project-id.iam.gserviceaccount.com`）。
-   * 開啟您的 [Google Drive 資料夾](https://drive.google.com/drive/folders/1L6f9jQx9phz_ZoVfDmBQViEVnoDHh_0a?usp=sharing)，點擊右上角「共用」，將該 Email 加入為 **「編輯者 (Editor)」**。
+   * 開啟您指定的 Google Drive 資料夾，點擊右上角「共用」，將該 Email 加入為 **「編輯者 (Editor)」**。
 3. **在 GitHub Secrets 貼上金鑰**：
    * 前往 GitHub 倉庫 ➡️ **Settings** ➡️ **Secrets and variables** ➡️ **Actions**。
    * 新增 Secret `GDRIVE_SERVICE_ACCOUNT_KEY`，將下載的 JSON 金鑰全文貼上即可！
