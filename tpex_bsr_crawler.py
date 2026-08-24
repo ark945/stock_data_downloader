@@ -495,30 +495,59 @@ class TPEXBrokerCrawler:
                             continue
 
                     stk_input.input(sym, clear=True, by_js=True)
+                    # 讓 React/Vue state 收到 input event
+                    try:
+                        page.run_js('var el=document.querySelector("input.code");if(el){el.dispatchEvent(new Event("input",{bubbles:true}));el.dispatchEvent(new Event("change",{bubbles:true}));}')
+                    except Exception:
+                        pass
 
-                    # 點擊查詢按鈕
                     q_btn = page.ele("css:.btn-query", timeout=2) or page.ele("text:查詢", timeout=2)
-                    if q_btn:
-                        q_btn.click(by_js=True)
-                        time.sleep(0.5)
+                    if not q_btn:
+                        failed_symbols.append(sym)
+                        consecutive_misses += 1
+                        ts_nq = get_taipei_now().strftime("%H:%M:%S")
+                        print(f"[{ts_nq}]   [上櫃 {idx}/{total}] [查詢鈕缺失] {sym}")
+                        # 觸發下方 restart 檢查
+                        if consecutive_misses >= MAX_CONSECUTIVE_MISS:
+                            if restart_counter >= MAX_RESTART_PER_ROUND:
+                                for skip_sym in stock_codes[idx:]:
+                                    failed_symbols.append(skip_sym)
+                                break
+                            _restart_session(f"連續 {consecutive_misses} 檔失敗")
+                            session_start = time.time()
+                            consecutive_misses = 0
+                        continue
+
+                    q_btn.click(by_js=True)
+                    # 等 AJAX 回結果 (原本 0.5s 太短，查詢還沒完成就點下載會拿到空檔)
+                    time.sleep(2.5)
 
                     found_csv = None
+                    reason = ""
 
-                    # 動態獲取下載按鈕並觸發下載
-                    d_btn = page.ele("text:下載 CSV", timeout=3) or page.ele("text:下載 CSV (UTF-8)", timeout=3)
-                    if d_btn:
+                    d_btn = page.ele("text:下載 CSV", timeout=5) or page.ele("text:下載 CSV (UTF-8)", timeout=3)
+                    if not d_btn:
+                        reason = "下載鈕缺失"
+                    else:
+                        clicked_ok = False
                         try:
                             d_btn.click.to_download(save_path=save_dir, rename=f"{sym}.csv")
-                        except Exception:
-                            try: d_btn.click(by_js=True)
-                            except Exception: pass
-                        
-                        # 輪詢查找最新產出的 CSV (最多等 8 秒，容忍 CF Turnstile 慢速驗證)。
-                        for _ in range(16):
-                            time.sleep(0.5)
-                            found_csv = self._find_downloaded_csv(sym, save_dir)
-                            if found_csv:
-                                break
+                            clicked_ok = True
+                        except Exception as e_dl:
+                            reason = f"to_download 例外: {type(e_dl).__name__}"
+                            try:
+                                d_btn.click(by_js=True)
+                                clicked_ok = True
+                            except Exception:
+                                pass
+                        if clicked_ok:
+                            for _ in range(16):
+                                time.sleep(0.5)
+                                found_csv = self._find_downloaded_csv(sym, save_dir)
+                                if found_csv:
+                                    break
+                            if not found_csv and not reason:
+                                reason = "下載 8s 未見檔"
 
                     ts_res = get_taipei_now().strftime("%H:%M:%S")
                     if found_csv and os.path.exists(found_csv):
@@ -533,11 +562,11 @@ class TPEXBrokerCrawler:
                         else:
                             failed_symbols.append(sym)
                             consecutive_misses += 1
-                            print(f"[{ts_res}]   [上櫃 {idx}/{total}] [無資料/略過] {sym}")
+                            print(f"[{ts_res}]   [上櫃 {idx}/{total}] [CSV 空/解析失敗] {sym}")
                     else:
                         failed_symbols.append(sym)
                         consecutive_misses += 1
-                        print(f"[{ts_res}]   [上櫃 {idx}/{total}] [無資料/略過] {sym}")
+                        print(f"[{ts_res}]   [上櫃 {idx}/{total}] [失敗: {reason or 'unknown'}] {sym}")
 
                     # 連續失敗閾值到達 → 立即 hard-restart (Turnstile Token 疑似失效)
                     if consecutive_misses >= MAX_CONSECUTIVE_MISS:
