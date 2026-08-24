@@ -403,7 +403,8 @@ class TPEXBrokerCrawler:
         except Exception:
             pass
         page.get(self.TPEX_URL, retry=3, timeout=25)
-        time.sleep(2.5)
+        # 給 Cloudflare Turnstile 足夠時間自動解算 (雲端 IP 首次進站尤其需要)。
+        time.sleep(8)
         return page, temp_user_data, save_dir
 
     def crawl_all_stocks_session(
@@ -426,6 +427,10 @@ class TPEXBrokerCrawler:
         SESSION_MAX_SEC = 240
         MAX_CONSECUTIVE_MISS = 3
         BASE_PORT = 9333
+        # 單一 round 內限制 restart 次數，超過就中斷 round 讓外層 retry 隔更久接手 (避免對 CF 反覆撞牆)。
+        MAX_RESTART_PER_ROUND = 3
+        # Hard-restart 前的冷卻，給 CF 該 IP 反爬蟲評分緩衝。
+        RESTART_COOLDOWN_SEC = 5
 
         page = None
         temp_user_data = None
@@ -455,8 +460,9 @@ class TPEXBrokerCrawler:
             restart_counter += 1
             port = BASE_PORT + restart_counter
             ts = get_taipei_now().strftime("%H:%M:%S")
-            print(f"[{ts}] [*] Hard-restart TPEX Chromium session #{restart_counter} (port={port}) — 原因: {reason}")
+            print(f"[{ts}] [*] Hard-restart TPEX Chromium session #{restart_counter} (port={port}) — 原因: {reason} — 冷卻 {RESTART_COOLDOWN_SEC}s")
             sys.stdout.flush()
+            time.sleep(RESTART_COOLDOWN_SEC)
             page, temp_user_data, save_dir = self._launch_tpex_browser_session(port)
 
         try:
@@ -507,8 +513,8 @@ class TPEXBrokerCrawler:
                             try: d_btn.click(by_js=True)
                             except Exception: pass
                         
-                        # 輪詢查找最新產出的 CSV (最多等 3 秒)
-                        for _ in range(6):
+                        # 輪詢查找最新產出的 CSV (最多等 8 秒，容忍 CF Turnstile 慢速驗證)。
+                        for _ in range(16):
                             time.sleep(0.5)
                             found_csv = self._find_downloaded_csv(sym, save_dir)
                             if found_csv:
@@ -535,6 +541,12 @@ class TPEXBrokerCrawler:
 
                     # 連續失敗閾值到達 → 立即 hard-restart (Turnstile Token 疑似失效)
                     if consecutive_misses >= MAX_CONSECUTIVE_MISS:
+                        if restart_counter >= MAX_RESTART_PER_ROUND:
+                            ts_abort = get_taipei_now().strftime("%H:%M:%S")
+                            print(f"[{ts_abort}] [!] 本 round 已 restart {restart_counter} 次仍無效，提前中斷交由外層 retry 補抓 (剩餘 {total - idx} 檔跳過)")
+                            for skip_sym in stock_codes[idx:]:
+                                failed_symbols.append(skip_sym)
+                            break
                         _restart_session(f"連續 {consecutive_misses} 檔失敗")
                         session_start = time.time()
                         consecutive_misses = 0
@@ -568,7 +580,7 @@ class TPEXBrokerCrawler:
         stock_codes: List[str],
         trade_date: str,
         max_rounds: int = 2,
-        cooldown_sec: int = 10
+        cooldown_sec: int = 30
     ) -> Tuple[List[pd.DataFrame], List[str]]:
         """
         對稱 TWSE 的多輪補抓機制：第 1 輪跑全清單，後續輪次只針對 failed_symbols 用新 Chromium session 重跑。
