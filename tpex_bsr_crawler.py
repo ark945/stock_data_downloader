@@ -15,7 +15,11 @@ from tpex_crawler_local import TPEXLocalCrawler
 
 def is_running_in_ci() -> bool:
     """判斷是否在 GitHub Actions 或雲端 CI 環境中執行"""
-    return os.environ.get("GITHUB_ACTIONS") == "true" or os.environ.get("CI") == "true"
+    return (
+        os.environ.get("GITHUB_ACTIONS") == "true" or
+        os.environ.get("CI") == "true" or
+        os.environ.get("RUNNER_OS") is not None
+    )
 
 
 class TPEXBrokerCrawler:
@@ -48,14 +52,14 @@ class TPEXBrokerCrawler:
     ) -> Tuple[List[pd.DataFrame], List[str]]:
         """
         全市場或分片上櫃股票採集 (自適應環境分流)
-        - CI / 雲端分片環境：調用 Cloud 純淨持久會話引擎
-        - 本地單機環境：調用 Local 極速多進程矩陣 + 斷點續傳引擎
+        - CI / 雲端分片環境：調用 Cloud 純淨持久會話引擎 (tpex_crawler_cloud.py)
+        - 本地單機環境：調用 Local 極速多進程矩陣 + 斷點續傳引擎 (tpex_crawler_local.py)
         """
         if is_running_in_ci():
-            # 雲端環境採用穩健單會話
+            print("[*] [環境路由] 偵測到 ☁️ GitHub Actions 雲端環境 ➔ 自動啟用 TPEXCloudCrawler (雲端專用防禦引擎)")
             return self.cloud_engine.crawl_stocks(stock_codes, trade_date)
         else:
-            # 本地環境採用多進程極速矩陣
+            print("[*] [環境路由] 偵測到 💻 Local 本地端環境 ➔ 自動啟用 TPEXLocalCrawler (本地專用多進程極速引擎)")
             return self.local_engine.crawl_stocks_with_retry(
                 stock_codes=stock_codes,
                 trade_date=trade_date,
