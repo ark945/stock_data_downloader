@@ -44,9 +44,16 @@ def upload_via_gas(local_file_path: str, upload_url: str, folder_id: str) -> Opt
             "mime_type": "application/octet-stream"
         }
 
-        resp = requests.post(upload_url, json=payload, timeout=60)
+        headers = {"Content-Type": "application/json"}
+        session = requests.Session()
+        resp = session.post(upload_url, json=payload, headers=headers, timeout=60, allow_redirects=True)
         if resp.status_code == 200:
-            res_data = resp.json()
+            try:
+                res_data = resp.json()
+            except Exception:
+                # 兼容純文字或重定向返回
+                print(f"[!] GAS 返回非 JSON 格式內容: {resp.text[:200]}")
+                return None
             if res_data.get("status") == "success":
                 file_id = res_data.get("file_id")
                 view_link = res_data.get("url") or f"https://drive.google.com/file/d/{file_id}/view"

@@ -56,9 +56,14 @@ def test_google_drive_connection():
         }
 
         try:
-            resp = requests.post(gas_url, json=payload, timeout=40)
+            session = requests.Session()
+            resp = session.post(gas_url, json=payload, headers={"Content-Type": "application/json"}, timeout=40, allow_redirects=True)
             if resp.status_code == 200:
-                res_json = resp.json()
+                try:
+                    res_json = resp.json()
+                except Exception:
+                    print(f"❌ [失敗] GAS 回傳內容非 JSON: {resp.text[:300]}")
+                    sys.exit(1)
                 if res_json.get("status") == "success":
                     print(f"  [✓] 測試檔案上傳成功！")
                     print(f"  [✓] 檔案 ID: {res_json.get('file_id')}")
