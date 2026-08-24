@@ -1,4 +1,4 @@
-name: 每日全市場券商分點爬蟲排程 (6-Runner 雲端分散極速版)
+name: 每日全市場券商分點爬蟲排程 (20-Runner 雲端分散極速版)
 
 env:
   TZ: "Asia/Taipei"
@@ -27,7 +27,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3, 4, 5] # 6 台完全獨立微軟雲端虛擬機 (6 個獨立 IP)
+        # 20 台獨立 Azure VM (獨立出流 IP)：每 shard 僅 ~50 TPEX 檔，低於 Cloudflare 對 IP 的 ~51 次下載封鎖門櫃。
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
 
     steps:
       - name: 檢出專案代碼 (Checkout)
@@ -73,9 +74,9 @@ jobs:
           fi
 
           if [ -n "$TARGET_DATE" ]; then
-            python "$TARGET_SCRIPT" --market "$MARKET" --date "$TARGET_DATE" --workers 2 --max-rounds 6 --shard-id ${{ matrix.shard }} --num-shards 6 --no-excel
+            python "$TARGET_SCRIPT" --market "$MARKET" --date "$TARGET_DATE" --workers 2 --max-rounds 6 --shard-id ${{ matrix.shard }} --num-shards 20 --no-excel
           else
-            python "$TARGET_SCRIPT" --market "$MARKET" --workers 2 --max-rounds 6 --shard-id ${{ matrix.shard }} --num-shards 6 --no-excel
+            python "$TARGET_SCRIPT" --market "$MARKET" --workers 2 --max-rounds 6 --shard-id ${{ matrix.shard }} --num-shards 20 --no-excel
           fi
 
       - name: 上傳分片 Parquet 產物
