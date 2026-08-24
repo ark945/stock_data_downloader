@@ -489,6 +489,28 @@ class TPEXBrokerCrawler:
                     ts_err = get_taipei_now().strftime("%H:%M:%S")
                     failed_symbols.append(sym)
                     print(f"[{ts_err}]   [上櫃 {idx}/{total}] [異常] {sym} ({e})")
+                    # 關鍵防護：若瀏覽器崩潰或頁面斷開，自動原地滿血重啟瀏覽器會話
+                    err_msg = str(e).lower()
+                    if "斷開" in str(e) or "disconnected" in err_msg or "target closed" in err_msg or "crash" in err_msg:
+                        print(f"[{ts_err}] [!] 偵測到 TPEX 瀏覽器連線中斷，正在原地滿血重啟引擎...")
+                        try:
+                            if page:
+                                page.quit()
+                        except Exception:
+                            pass
+                        time.sleep(2.0)
+                        try:
+                            page = ChromiumPage(addr_or_opts=co)
+                            page.set.download_path(save_dir)
+                            try:
+                                page.download.set.show_msg(False)
+                            except Exception:
+                                pass
+                            page.get(self.TPEX_URL, retry=3, timeout=25)
+                            time.sleep(3.5)
+                            print(f"[{ts_err}] [✓] TPEX 瀏覽器引擎已滿血重啟就緒！")
+                        except Exception as ex_recon:
+                            print(f"[!] 瀏覽器重啟失敗: {ex_recon}")
 
                 sys.stdout.flush()
 
