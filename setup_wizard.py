@@ -304,29 +304,54 @@ def run_quick_test():
         subprocess.run([sys.executable, "-c", "from tpex_bsr_crawler import TPEXBrokerCrawler; c = TPEXBrokerCrawler(); df, f = c.crawl_stocks_with_retry(['6488'], '2026-08-21'); print('抓取結果:', len(df), '筆')"])
 
 
+def get_workers_selection(default_workers: int = 4) -> int:
+    """選擇運行線程與速度模式"""
+    print("\n⚡ 選擇採集速度與線程模式：")
+    print(f"  1. 🛡️ 【安全穩健模式】4 Workers (極低負擔、零封鎖風險，約 20~25 分鐘) [推薦 ⭐]")
+    print(f"  2. 🚀 【極速衝刺模式】6 Workers (多進程極速並行，約 15 分鐘)")
+    print(f"  3. 🛠️ 【自訂 Workers】手動輸入線程數 (1 ~ 8)")
+    print(f"  (按 Enter 直接套用預設: {default_workers} Workers)")
+
+    w_choice = input(f"請選擇速度模式 (1-3，預設 1) > ").strip()
+    if w_choice == "2":
+        return 6
+    elif w_choice == "3":
+        custom_w = input("請輸入自訂 Workers 數量 (1-8) > ").strip()
+        if custom_w.isdigit() and 1 <= int(custom_w) <= 8:
+            return int(custom_w)
+        print(f"[!] 輸入無效，自動採用安全模式 4 Workers")
+        return 4
+    return 4
+
+
 def run_crawler_menu():
     """執行爬蟲任務選單"""
     print("\n🚀 選擇爬蟲任務：")
-    print("  1. 一鍵採集全市場 (上市 + 上櫃) [最新交易日, 預設 6-Workers 極速並行]")
+    print("  1. 一鍵採集全市場 (上市 + 上櫃) [最新交易日, 產出 Parquet 與 Excel]")
     print("  2. 一鍵採集全市場 (極速模式，僅產出 Parquet 不出 Excel)")
     print("  3. 僅採集上市股票 (TWSE)")
-    print("  4. 僅採集上櫃股票 (TPEX 6-Workers 極速並行)")
+    print("  4. 僅採集上櫃股票 (TPEX)")
     print("  5. 指定歷史日期採集 (例如 2026-08-21)")
     print("  0. 返回主選單")
 
     c = input("\n請輸入選項 (0-5) > ").strip()
-    if c == "1":
-        subprocess.run([sys.executable, "stock_crawler_coordinator.py", "--market", "all", "--workers", "6"])
-    elif c == "2":
-        subprocess.run([sys.executable, "stock_crawler_coordinator.py", "--market", "all", "--workers", "6", "--no-excel"])
-    elif c == "3":
-        subprocess.run([sys.executable, "stock_crawler_coordinator.py", "--market", "twse", "--workers", "8"])
-    elif c == "4":
-        subprocess.run([sys.executable, "stock_crawler_coordinator.py", "--market", "tpex", "--workers", "6"])
-    elif c == "5":
-        date_str = input("請輸入指定日期 (YYYY-MM-DD) > ").strip()
-        if date_str:
-            subprocess.run([sys.executable, "stock_crawler_coordinator.py", "--date", date_str, "--market", "all", "--workers", "6"])
+    if c in ["1", "2", "3", "4", "5"]:
+        # 取得使用者期望的線程模式
+        workers = get_workers_selection(default_workers=4)
+
+        if c == "1":
+            subprocess.run([sys.executable, "stock_crawler_coordinator.py", "--market", "all", "--workers", str(workers)])
+        elif c == "2":
+            subprocess.run([sys.executable, "stock_crawler_coordinator.py", "--market", "all", "--workers", str(workers), "--no-excel"])
+        elif c == "3":
+            twse_w = min(workers + 2, 8)  # 上市純 HTTP 請求可額外微增線程
+            subprocess.run([sys.executable, "stock_crawler_coordinator.py", "--market", "twse", "--workers", str(twse_w)])
+        elif c == "4":
+            subprocess.run([sys.executable, "stock_crawler_coordinator.py", "--market", "tpex", "--workers", str(workers)])
+        elif c == "5":
+            date_str = input("\n請輸入指定日期 (YYYY-MM-DD) > ").strip()
+            if date_str:
+                subprocess.run([sys.executable, "stock_crawler_coordinator.py", "--date", date_str, "--market", "all", "--workers", str(workers)])
 
 
 def main():
