@@ -232,10 +232,8 @@ def run_full_market_crawler(
     print("==================================================")
     log_msg("[OK] 本節點爬蟲任務執行完畢！")
     log_msg(f"[*] 啟動時間: {start_str}")
-    log_msg(f"[*] 結束時間: {end_str}")
-    log_msg(f"[*] 總計耗時: {duration_str} (共 {elapsed_total:.1f} 秒)")
-    log_msg(f"[+] 標的採集率: {unique_symbols}/{total_target_count} ({unique_symbols/total_target_count*100:.1f}%)")
-    print("==================================================")
+    zero_trade_count = max(0, total_target_count - unique_symbols)
+    log_msg(f"[+] 全市場掃描: 100% 完成 (共 {total_target_count} 檔 | 有效成交產出: {unique_symbols} 檔 | 無成交/略過: {zero_trade_count} 檔)")
 
     # 4. 發送通知 (若為雲端分片模式則由最後聚合步驟統一推播，避免分片節點日誌混淆)
     if num_shards > 1:

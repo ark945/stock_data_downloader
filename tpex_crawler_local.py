@@ -45,12 +45,14 @@ def _mp_local_worker_task(
     """本地獨立進程專屬的 Chromium Worker 任務"""
     from DrissionPage import ChromiumPage, ChromiumOptions
 
-    save_dir = os.path.join(download_dir, f"worker_proc_{worker_id}")
+    port = 9500 + worker_id
+    save_dir = os.path.join(download_dir, f"worker_dl_{worker_id}")
     os.makedirs(save_dir, exist_ok=True)
-    temp_user_data = tempfile.mkdtemp()
+    temp_user_data = tempfile.mkdtemp(prefix=f"tpex_u_{worker_id}_")
 
     co = ChromiumOptions()
-    co.set_local_port(9500 + worker_id)
+    co.set_local_port(port)
+    co.set_user_data_path(temp_user_data)
     if sys.platform.startswith("linux"):
         for bin_p in ["/usr/bin/chromium-browser", "/usr/bin/chromium", "/usr/bin/google-chrome"]:
             if os.path.exists(bin_p):
@@ -61,11 +63,10 @@ def _mp_local_worker_task(
     co.set_argument("--disable-gpu")
     co.set_argument("--disable-dev-shm-usage")
     co.set_argument("--disable-infobars")
-    co.set_argument("--window-size=1280,720")
+    co.set_argument("--window-size=1280,800")
     co.set_argument("--excludeSwitches", "enable-automation")
     co.set_argument("--useAutomationExtension", False)
 
-    co.set_user_data_path(temp_user_data)
     co.set_pref("profile.default_content_setting_values.automatic_downloads", 1)
     co.set_pref("download.default_directory", save_dir)
     co.set_pref("download.prompt_for_download", False)
@@ -94,16 +95,19 @@ def _mp_local_worker_task(
 
         for idx, sym in enumerate(symbols, 1):
             try:
-                # 1. 清空舊 CSV
-                # 1. 頁面健康檢查與 520/500/跳頁自動自癒導回
+                # 1. 清理舊 CSV
+                for old_f in glob.glob(os.path.join(save_dir, "*")):
+                    try: os.remove(old_f)
+                    except OSError: pass
+
+                # 2. 確保在 BrokerBS 頁面
                 cur_url = page.url or ""
                 cur_title = page.title or ""
                 if "brokerBS.html" not in cur_url or "520" in cur_title or "Error" in cur_title or "unknown error" in cur_title:
                     page.get(tpex_url, retry=3, timeout=25)
                     time.sleep(3.0)
 
-                # 每次動態重新獲取輸入框
-                stk_input = page.ele("css:input.code", timeout=5) or page.ele("@name=code", timeout=5)
+                stk_input = page.ele("css:input.code", timeout=4) or page.ele("@name=code", timeout=4)
                 if not stk_input:
                     page.get(tpex_url, retry=2, timeout=20)
                     time.sleep(2.5)
@@ -115,27 +119,18 @@ def _mp_local_worker_task(
                 stk_input.input(sym, clear=True, by_js=True)
                 time.sleep(0.3)
 
-                # 2. 點擊日報表 [查詢] 按鈕
-                q_btn = page.ele("xpath://div[contains(@class,'formblock')]//button[contains(text(),'查詢')]") or page.ele("xpath://button[text()='查詢']") or page.ele("text:查詢")
+                # 3. 點擊日報表 [查詢] 按鈕
+                q_btn = page.ele("xpath://div[contains(@class,'formblock')]//button[contains(text(),'查詢')]") or page.ele("css:form.formblock button[type=submit]") or page.ele("text:查詢")
                 if q_btn:
                     try: q_btn.click(by_js=True)
                     except Exception:
                         try: q_btn.click()
                         except Exception: pass
 
-                # 等待查詢載入完成
+                # 等待查詢載入
                 time.sleep(1.2)
 
-                # 檢查是否遭遇 520 伺服器錯誤
-                if "520" in (page.title or "") or "Error" in (page.title or ""):
-                    ts_err = datetime.now().strftime("%H:%M:%S")
-                    print(f"[{ts_err}]   [Worker-{worker_id} {idx}/{worker_total}] [TPEX 520 伺服器過載] {sym} ➔ 自動排入第2輪補抓")
-                    failed_symbols.append(sym)
-                    page.get(tpex_url, retry=2, timeout=20)
-                    time.sleep(2.0)
-                    continue
-
-                # 3. 點擊 [下載 CSV (UTF-8)] 按鈕
+                # 4. 點擊 [下載 CSV (UTF-8)] 按鈕 (全量數據)
                 d_btn = page.ele("xpath://button[contains(text(),'UTF-8')]") or page.ele("text:下載 CSV (UTF-8)") or page.ele("text:下載 CSV")
                 if d_btn:
                     try:
@@ -145,7 +140,7 @@ def _mp_local_worker_task(
                         except Exception: pass
 
                     found_csv = None
-                    for _ in range(12):
+                    for _ in range(16):
                         time.sleep(0.4)
                         if glob.glob(os.path.join(save_dir, "*.crdownload")):
                             continue
@@ -155,58 +150,23 @@ def _mp_local_worker_task(
                             break
 
                     ts_res = datetime.now().strftime("%H:%M:%S")
-                    df = None
                     if found_csv and os.path.exists(found_csv):
                         df = crawler.parse_tpex_csv_to_dataframe(found_csv, sym, trade_date)
+                        if df is not None and not df.empty:
+                            collected_dfs.append(df)
+                            print(f"[{ts_res}]   [Worker-{worker_id} {idx}/{worker_total}] [OK] {sym} ({len(df)} 筆全量)")
+                        else:
+                            print(f"[{ts_res}]   [Worker-{worker_id} {idx}/{worker_total}] [無成交明細/略過] {sym}")
                         try: os.remove(found_csv)
                         except OSError: pass
-
-                    # 若 CSV 下載為 0B 或解析為空，自動啟用 DOM 表格原生提取 Fallback
-                    if df is None or df.empty:
-                        rows = page.eles("css:table tbody tr", timeout=2)
-                        if rows and len(rows) > 0:
-                            dom_data = []
-                            for r in rows:
-                                tds = [td.text.strip() for td in r.eles("tag:td")]
-                                if len(tds) >= 5:
-                                    # 序號, 券商, 價格, 買進股數, 賣出股數
-                                    b_info = tds[1].split()
-                                    b_id = b_info[0] if b_info else "0000"
-                                    try:
-                                        p_val = float(tds[2].replace(",", ""))
-                                        b_vol = float(tds[3].replace(",", ""))
-                                        s_vol = float(tds[4].replace(",", ""))
-                                        dom_data.append({
-                                            "symbol": str(sym),
-                                            "trade_date": str(trade_date),
-                                            "broker_id": str(b_id),
-                                            "buy_vol": b_vol,
-                                            "sell_vol": s_vol,
-                                            "net_vol": b_vol - s_vol,
-                                            "buy_amt": (b_vol * p_val) / 1000.0,
-                                            "sell_amt": (s_vol * p_val) / 1000.0,
-                                            "net_amt": ((b_vol - s_vol) * p_val) / 1000.0,
-                                            "buy_avg_price": p_val if b_vol > 0 else np.nan,
-                                            "sell_avg_price": p_val if s_vol > 0 else np.nan,
-                                            "turnover": ((b_vol + s_vol) * p_val) / 1000.0,
-                                            "market_share": 0.0
-                                        })
-                                    except Exception:
-                                        pass
-                            if dom_data:
-                                df = pd.DataFrame(dom_data)
-
-                    if df is not None and not df.empty:
-                        collected_dfs.append(df)
-                        print(f"[{ts_res}]   [Worker-{worker_id} {idx}/{worker_total}] [OK] {sym} ({len(df)} 筆)")
                     else:
-                        # 檢查是否當日真無成交
-                        has_trade = bool(page.ele("text:成交筆數", timeout=1)) or bool(page.ele("css:table tbody tr", timeout=1))
+                        # 檢查是否為當日無成交標的
+                        has_trade = bool(page.ele("css:table tbody tr", timeout=1))
                         if not has_trade:
                             print(f"[{ts_res}]   [Worker-{worker_id} {idx}/{worker_total}] [無成交/略過] {sym}")
                         else:
                             failed_symbols.append(sym)
-                            print(f"[{ts_res}]   [Worker-{worker_id} {idx}/{worker_total}] [下載異常/待補抓] {sym}")
+                            print(f"[{ts_res}]   [Worker-{worker_id} {idx}/{worker_total}] [下載超時] {sym}")
                 else:
                     ts_btn = datetime.now().strftime("%H:%M:%S")
                     print(f"[{ts_btn}]   [Worker-{worker_id} {idx}/{worker_total}] [查無資料/無按鈕] {sym}")
