@@ -241,25 +241,34 @@ class TPEXCloudCrawler:
                         try: os.remove(old_f)
                         except OSError: pass
 
-                    stk_input = page.ele("css:input.code", timeout=4) or page.ele("@name=code", timeout=4)
+                # 確保在 BrokerBS 頁面
+                if "brokerBS.html" not in page.url:
+                    page.get(self.TPEX_URL, retry=2, timeout=20)
+                    time.sleep(2.5)
+
+                stk_input = page.ele("css:input.code", timeout=5) or page.ele("@name=code", timeout=5)
+                if not stk_input:
+                    page.get(self.TPEX_URL, retry=2, timeout=15)
+                    time.sleep(3.0)
+                    stk_input = page.ele("css:input.code", timeout=5) or page.ele("@name=code", timeout=5)
                     if not stk_input:
-                        page.get(self.TPEX_URL, retry=2, timeout=15)
-                        time.sleep(3.0)
-                        stk_input = page.ele("css:input.code", timeout=5) or page.ele("@name=code", timeout=5)
-                        if not stk_input:
-                            failed_symbols.append(sym)
-                            continue
+                        failed_symbols.append(sym)
+                        continue
 
-                    stk_input.input(sym, clear=True, by_js=True)
-                    try:
-                        page.run_js('var el=document.querySelector("input.code");if(el){el.dispatchEvent(new Event("input",{bubbles:true}));el.dispatchEvent(new Event("change",{bubbles:true}));}')
-                    except Exception:
-                        pass
+                stk_input.input(sym, clear=True, by_js=True)
+                page.run_js("var el=document.querySelector('input.code'); if(el){el.dispatchEvent(new Event('input',{bubbles:true})); el.dispatchEvent(new Event('change',{bubbles:true}));}")
 
-                    q_btn = page.ele("css:.btn-query", timeout=2) or page.ele("text:查詢", timeout=2)
-                    if q_btn:
-                        q_btn.click(by_js=True)
-                        time.sleep(1.0)
+                # 嚴格限縮在 input.code 所在的同一個 form 表單內尋找查詢按鈕
+                form_ele = stk_input.parent("tag:form")
+                q_btn = form_ele.ele("css:button.btn-search") if form_ele else None
+                if not q_btn:
+                    q_btn = page.ele("css:form.page-form button.btn-search") or page.ele("css:button.btn-search")
+
+                if q_btn:
+                    q_btn.click(by_js=True)
+
+                time.sleep(1.3)
+                page.ele(f"text:{sym}", timeout=3)
 
                     d_btn = page.ele("text:下載 CSV", timeout=2.5) or page.ele("text:下載 CSV (UTF-8)", timeout=1.5)
                     if not d_btn:

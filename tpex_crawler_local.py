@@ -95,12 +95,13 @@ def _mp_local_worker_task(
         for idx, sym in enumerate(symbols, 1):
             try:
                 # 1. 清空舊 CSV
-                for f in glob.glob(os.path.join(save_dir, "*")):
-                    try: os.remove(f)
-                    except OSError: pass
+                # 1. 確保在 BrokerBS 頁面 (若誤跳頁則自動導回)
+                if "brokerBS.html" not in page.url:
+                    page.get(tpex_url, retry=2, timeout=20)
+                    time.sleep(2.5)
 
                 # 每次動態重新獲取輸入框，避免 Stale Element 失效
-                stk_input = page.ele("css:input.code", timeout=4) or page.ele("@name=code", timeout=4)
+                stk_input = page.ele("css:input.code", timeout=5) or page.ele("@name=code", timeout=5)
                 if not stk_input:
                     page.get(tpex_url, retry=2, timeout=20)
                     time.sleep(2.5)
@@ -112,13 +113,17 @@ def _mp_local_worker_task(
                 stk_input.input(sym, clear=True, by_js=True)
                 page.run_js("var el=document.querySelector('input.code'); if(el){el.dispatchEvent(new Event('input',{bubbles:true})); el.dispatchEvent(new Event('change',{bubbles:true}));}")
 
-                # 精準點擊表單內部查詢按鈕
-                q_btn = page.ele("css:.page-form button.btn-search", timeout=2) or page.ele("css:button.btn-search", timeout=2) or page.ele("text:查詢", timeout=2)
+                # 2. 嚴格限縮在 input.code 所在的同一個 form 表單內尋找查詢按鈕 (絕不點到頂部全站搜尋！)
+                form_ele = stk_input.parent("tag:form")
+                q_btn = form_ele.ele("css:button.btn-search") if form_ele else None
+                if not q_btn:
+                    q_btn = page.ele("css:form.page-form button.btn-search") or page.ele("css:button.btn-search")
+
                 if q_btn:
                     q_btn.click(by_js=True)
 
-                # 等待頁面表格刷新出現該股票的標題 (例如 "1595")，確保下載的是當前股票
-                time.sleep(1.2)
+                # 等待資料表格刷新
+                time.sleep(1.3)
                 page.ele(f"text:{sym}", timeout=3)
 
                 # 2. 實體按鈕精準存在性檢查
