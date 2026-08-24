@@ -66,6 +66,7 @@ def _mp_local_worker_task(
     co.set_argument("--useAutomationExtension", False)
 
     co.set_user_data_path(temp_user_data)
+    co.set_pref("profile.default_content_setting_values.automatic_downloads", 1)
     co.set_pref("download.default_directory", save_dir)
     co.set_pref("download.prompt_for_download", False)
     co.set_pref("safebrowsing.enabled", True)
@@ -86,40 +87,42 @@ def _mp_local_worker_task(
 
         # 錯開 Worker 啟動時間
         if worker_id > 1:
-            time.sleep((worker_id - 1) * 1.2)
+            time.sleep((worker_id - 1) * 1.5)
 
-        page.get(tpex_url, retry=3, timeout=25)
-        time.sleep(2.5)
-
-        stk_input = page.ele("css:input.code", timeout=4) or page.ele("@name=code", timeout=4)
-        q_btn = page.ele("css:.btn-query", timeout=2) or page.ele("text:查詢", timeout=2)
+        page.get(tpex_url, retry=3, timeout=30)
+        time.sleep(3.0)
 
         for idx, sym in enumerate(symbols, 1):
             try:
                 # 1. 清空舊 CSV
-                for f in glob.glob(os.path.join(save_dir, f"*{sym}*")):
+                for f in glob.glob(os.path.join(save_dir, "*")):
                     try: os.remove(f)
                     except OSError: pass
 
+                # 每次動態重新獲取輸入框，避免 Stale Element 失效
+                stk_input = page.ele("css:input.code", timeout=4) or page.ele("@name=code", timeout=4)
                 if not stk_input:
-                    stk_input = page.ele("css:input.code", timeout=3) or page.ele("@name=code", timeout=3)
+                    page.get(tpex_url, retry=2, timeout=20)
+                    time.sleep(2.5)
+                    stk_input = page.ele("css:input.code", timeout=5) or page.ele("@name=code", timeout=5)
+                    if not stk_input:
+                        failed_symbols.append(sym)
+                        continue
 
-                if stk_input:
-                    stk_input.input(sym, clear=True, by_js=True)
-                    try:
-                        page.run_js('var el=document.querySelector("input.code");if(el){el.dispatchEvent(new Event("input",{bubbles:true}));el.dispatchEvent(new Event("change",{bubbles:true}));}')
-                    except Exception:
-                        pass
+                stk_input.input(sym, clear=True, by_js=True)
+                page.run_js("var el=document.querySelector('input.code'); if(el){el.dispatchEvent(new Event('input',{bubbles:true})); el.dispatchEvent(new Event('change',{bubbles:true}));}")
 
-                if not q_btn:
-                    q_btn = page.ele("css:.btn-query", timeout=2) or page.ele("text:查詢", timeout=2)
-
+                # 精準點擊表單內部查詢按鈕
+                q_btn = page.ele("css:.page-form button.btn-search", timeout=2) or page.ele("css:button.btn-search", timeout=2) or page.ele("text:查詢", timeout=2)
                 if q_btn:
                     q_btn.click(by_js=True)
-                    time.sleep(1.0)
 
-                # 2. 實體按鈕精準存在性檢查 (100% 杜絕文字模糊誤殺)
-                d_btn = page.ele("text:下載 CSV", timeout=2.5) or page.ele("text:下載 CSV (UTF-8)", timeout=1.5)
+                # 等待頁面表格刷新出現該股票的標題 (例如 "1595")，確保下載的是當前股票
+                time.sleep(1.2)
+                page.ele(f"text:{sym}", timeout=3)
+
+                # 2. 實體按鈕精準存在性檢查
+                d_btn = page.ele("text:下載 CSV (UTF-8)", timeout=4) or page.ele("text:下載 CSV", timeout=2)
                 if d_btn:
                     try:
                         d_btn.click(by_js=True)
@@ -129,7 +132,7 @@ def _mp_local_worker_task(
 
                     found_csv = None
                     for _ in range(12):
-                        time.sleep(0.5)
+                        time.sleep(0.4)
                         if glob.glob(os.path.join(save_dir, "*.crdownload")):
                             continue
                         candidates = [f for f in glob.glob(os.path.join(save_dir, "*.csv")) if os.path.getsize(f) > 30]
