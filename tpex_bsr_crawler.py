@@ -552,3 +552,37 @@ class TPEXBrokerCrawler:
             _cleanup_session()
 
         return collected_dfs, failed_symbols
+
+    def crawl_stocks_with_retry(
+        self,
+        stock_codes: List[str],
+        trade_date: str,
+        max_rounds: int = 2,
+        cooldown_sec: int = 10
+    ) -> Tuple[List[pd.DataFrame], List[str]]:
+        """
+        對稱 TWSE 的多輪補抓機制：第 1 輪跑全清單，後續輪次只針對 failed_symbols 用新 Chromium session 重跑。
+        每輪內部仍有 4 分鐘 Turnstile session hard-restart。
+        """
+        all_dfs: List[pd.DataFrame] = []
+        remaining = list(stock_codes)
+        for round_no in range(1, max_rounds + 1):
+            if not remaining:
+                break
+            ts = get_taipei_now().strftime("%H:%M:%S")
+            print(f"[{ts}] >>> TPEX 第 {round_no}/{max_rounds} 輪抓取啟動 (待抓: {len(remaining)} 檔)")
+            sys.stdout.flush()
+            dfs, failed = self.crawl_all_stocks_session(remaining, trade_date)
+            all_dfs.extend(dfs)
+            ts_end = get_taipei_now().strftime("%H:%M:%S")
+            print(f"[{ts_end}] [+] TPEX 第 {round_no} 輪完成：成功 {len(dfs)} 檔，仍失敗 {len(failed)} 檔")
+            if not failed:
+                print(f"[{ts_end}] [+] TPEX 全清單抓取完成（第 {round_no} 輪達成）")
+                remaining = []
+                break
+            if round_no < max_rounds:
+                print(f"[{ts_end}] [*] 冷卻 {cooldown_sec}s 後進第 {round_no + 1} 輪補抓...")
+                sys.stdout.flush()
+                time.sleep(cooldown_sec)
+            remaining = failed
+        return all_dfs, remaining
