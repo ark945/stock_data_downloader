@@ -5,3 +5,20 @@ temp_test/
 *.tmp
 output/*.parquet
 output/*.xlsx
+
+# Secrets & credentials (never commit)
+.env
+.env.*
+credentials.json
+service_account.json
+gdrive_key.json
+*.pem
+*.key
+*.p12
+
+# Editor / IDE
+.vscode/
+.idea/
+
+# Debug artifacts
+debug_*.csv

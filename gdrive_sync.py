@@ -12,8 +12,8 @@ import sys
 import json
 from typing import Optional, Dict, Any
 
-# 預設目標 Google Drive 資料夾 ID
-DEFAULT_GDRIVE_FOLDER_ID = "1L6f9jQx9phz_ZoVfDmBQViEVnoDHh_0a"
+# 目標 Google Drive 資料夾 ID：一律由環境變數 GDRIVE_FOLDER_ID 提供，避免將個人資料夾 ID 寫入公開原始碼
+DEFAULT_GDRIVE_FOLDER_ID = ""
 
 SCOPES = ["https://www.googleapis.com/auth/drive"]
 
@@ -76,7 +76,7 @@ def upload_file_to_gdrive(
     """
     上傳或覆蓋檔案至 Google Drive 指定資料夾
     :param local_file_path: 本地檔案路徑 (例如 output/api_absr1_2026-08-21_2026-08-21_1.parquet)
-    :param folder_id: Google Drive 資料夾 ID (預設為 1L6f9jQx9phz_ZoVfDmBQViEVnoDHh_0a)
+    :param folder_id: Google Drive 資料夾 ID (若未提供，則由環境變數 GDRIVE_FOLDER_ID 讀取)
     :param service_account_key: 服務帳戶 JSON 金鑰內容或檔案路徑
     :return: 檔案資訊字典 {"file_id", "name", "web_view_link", "size_mb"} 或 None
     """
@@ -85,6 +85,9 @@ def upload_file_to_gdrive(
         return None
 
     target_folder = folder_id or os.environ.get("GDRIVE_FOLDER_ID") or DEFAULT_GDRIVE_FOLDER_ID
+    if not target_folder:
+        print("[!] 未設定 GDRIVE_FOLDER_ID 環境變數，略過 Google Drive 上傳。")
+        return None
     file_name = os.path.basename(local_file_path)
     file_size_mb = os.path.getsize(local_file_path) / (1024 * 1024)
 

@@ -163,10 +163,10 @@ def run_full_market_crawler(
         log_msg(f"[*] 取得上櫃標的清單: {len(tpex_symbols)} 檔 (分片 {shard_id + 1}/{num_shards})")
         
         tpex_crawler = TPEXBrokerCrawler()
-        tpex_dfs, tpex_failed = tpex_crawler.crawl_all_stocks_session(
+        tpex_dfs, tpex_failed = tpex_crawler.crawl_stocks_with_retry(
             stock_codes=tpex_symbols,
             trade_date=trade_date,
-            workers=1
+            max_rounds=2
         )
         collected_dfs.extend(tpex_dfs)
         
