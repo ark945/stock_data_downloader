@@ -241,31 +241,27 @@ class TPEXCloudCrawler:
                         try: os.remove(old_f)
                         except OSError: pass
 
-                    # 確保在 BrokerBS 頁面
-                    if "brokerBS.html" not in page.url:
-                        page.get(self.TPEX_URL, retry=2, timeout=20)
-                        time.sleep(2.5)
-
-                    stk_input = page.ele("css:form.formblock input.code", timeout=5) or page.ele("css:input.code", timeout=5)
+                    stk_input = page.ele("css:input.code", timeout=4) or page.ele("@name=code", timeout=4)
                     if not stk_input:
                         page.get(self.TPEX_URL, retry=2, timeout=15)
                         time.sleep(3.0)
-                        stk_input = page.ele("css:form.formblock input.code", timeout=5) or page.ele("css:input.code", timeout=5)
+                        stk_input = page.ele("css:input.code", timeout=5) or page.ele("@name=code", timeout=5)
                         if not stk_input:
                             failed_symbols.append(sym)
                             continue
 
                     stk_input.input(sym, clear=True, by_js=True)
-                    page.run_js("var el=document.querySelector('form.formblock input.code') || document.querySelector('input.code'); if(el){el.dispatchEvent(new Event('input',{bubbles:true})); el.dispatchEvent(new Event('change',{bubbles:true}));}")
+                    try:
+                        page.run_js('var el=document.querySelector("input.code");if(el){el.dispatchEvent(new Event("input",{bubbles:true}));el.dispatchEvent(new Event("change",{bubbles:true}));}')
+                    except Exception:
+                        pass
 
-                    # 嚴格鎖定 form.formblock 內部的真正查詢按鈕
-                    q_btn = page.ele("css:form.formblock button[type=submit]", timeout=3)
+                    q_btn = page.ele("css:.btn-query", timeout=2) or page.ele("text:查詢", timeout=2)
                     if q_btn:
                         q_btn.click(by_js=True)
+                        time.sleep(1.0)
 
-                    time.sleep(1.3)
-
-                    d_btn = page.ele('css:button[data-format="utf-8"]', timeout=3) or page.ele("text:下載 CSV (UTF-8)", timeout=2) or page.ele("text:下載 CSV", timeout=2)
+                    d_btn = page.ele("text:下載 CSV", timeout=2.5) or page.ele("text:下載 CSV (UTF-8)", timeout=1.5)
                     if not d_btn:
                         ts_nd = get_taipei_now().strftime("%H:%M:%S")
                         print(f"[{ts_nd}]   [上櫃 {idx}/{total}] [查無資料/無按鈕] {sym}")
