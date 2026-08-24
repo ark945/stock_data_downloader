@@ -46,6 +46,45 @@ jobs:
           Xvfb :99 -screen 0 1920x1080x24 &
           sleep 2
 
+      - name: '[DIAG] 診斷瀏覽器與 TPEX Cloudflare 狀態 (Shard ${{ matrix.shard }})'
+        continue-on-error: true
+        run: |
+          echo "===== 瀏覽器可用性 ====="
+          which chromium-browser google-chrome chromium 2>&1 || true
+          echo "----- chromium-browser --version -----"
+          /usr/bin/chromium-browser --version 2>&1 || echo "[!] chromium-browser 無法執行"
+          echo "----- google-chrome --version -----"
+          /usr/bin/google-chrome --version 2>&1 || echo "[!] google-chrome 不存在或無法執行"
+          echo "----- chromium --version -----"
+          /usr/bin/chromium --version 2>&1 || echo "[!] chromium 不存在"
+          echo "----- readlink chromium-browser -----"
+          readlink -f /usr/bin/chromium-browser 2>&1 || true
+          echo "----- snap 環境 -----"
+          ls -la /snap/bin/ 2>&1 || echo "[!] /snap/bin/ 不存在"
+          echo "----- OS 版本 -----"
+          lsb_release -a 2>&1 || cat /etc/os-release
+          echo ""
+          echo "===== TPEX Cloudflare 探測 ====="
+          echo "----- HEAD Header -----"
+          curl -sSI "https://www.tpex.org.tw/zh-tw/mainboard/trading/info/brokerBS.html" \
+            -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
+            | head -40 || true
+          echo ""
+          echo "----- GET Body 特徵掃描 -----"
+          curl -s -o /tmp/tpex.html \
+            -w "HTTP %{http_code}  size=%{size_download}  time=%{time_total}s\n" \
+            "https://www.tpex.org.tw/zh-tw/mainboard/trading/info/brokerBS.html" \
+            -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
+            || true
+          echo "--- Cloudflare 挑戰特徵 ---"
+          grep -io "just a moment\|challenge-platform\|cf-mitigated\|turnstile\|cf-chl\|cf_bm\|__cf_" /tmp/tpex.html | sort -u || echo "[OK] 未偵測到 Cloudflare 挑戰特徵字串"
+          echo "--- 頁面 <title> ---"
+          grep -oE "<title>[^<]*</title>" /tmp/tpex.html || true
+          echo ""
+          echo "===== 出口 IP ====="
+          curl -s "https://api.ipify.org" || true
+          echo ""
+
       - name: 安裝 Python 套件依賴
         run: |
           python -m pip install --upgrade pip
