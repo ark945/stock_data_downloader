@@ -557,7 +557,8 @@ class TPEXBrokerCrawler:
                         dl_ret = None
                         clicked_ok = False
                         try:
-                            dl_ret = d_btn.click.to_download(save_path=save_dir, rename=f"{sym}.csv", timeout=4)
+                            # 給予充裕的 8 秒等待，確保大資料量或雲端延遲能順利下載
+                            dl_ret = d_btn.click.to_download(save_path=save_dir, rename=f"{sym}.csv", timeout=8)
                             clicked_ok = True
                         except Exception as e_dl:
                             reason = f"to_download 例外: {type(e_dl).__name__}"
@@ -567,9 +568,9 @@ class TPEXBrokerCrawler:
                             except Exception:
                                 pass
 
-                        # 嘗試從 listener 攔到 response (timeout 縮短至 3s)
+                        # 嘗試從 listener 攔到 response (保留 6 秒充裕時間)
                         try:
-                            packet = page.listen.wait(timeout=3)
+                            packet = page.listen.wait(timeout=6)
                             if packet and packet.response and packet.response.body:
                                 body = packet.response.body
                                 body_bytes = body.encode("utf-8", errors="ignore") if isinstance(body, str) else bytes(body)
@@ -588,8 +589,8 @@ class TPEXBrokerCrawler:
                             pass
 
                         if not found_csv and clicked_ok:
-                            # 快速檔案輪詢 (最多 2 秒)
-                            for _ in range(4):
+                            # 充裕的檔案輪詢 (8 秒：0.5s * 16 次)
+                            for _ in range(16):
                                 time.sleep(0.5)
                                 found_csv = self._find_downloaded_csv(sym, save_dir)
                                 if found_csv:
