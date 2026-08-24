@@ -1,18 +1,13 @@
-"""
-台股券商分點爬蟲系統 — 本地端前置設定與一鍵診斷精靈 (Local Setup Wizard)
-用於：
-1. 檢查本地 Python 套件、Chrome 瀏覽器與 CNN 模型健康狀態
-2. 互動式填寫 Google Drive、Telegram、Email 設定並自動生成 .env
-3. 一鍵執行連線與爬蟲測試
-4. 快速啟動本地採集任務
-"""
-
 import os
 import sys
 import time
 import shutil
 import subprocess
 from datetime import datetime
+
+# 抑制 TensorFlow 與底層 C++ 冗長日誌
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
 
 ENV_PATH = os.path.join(os.path.dirname(__file__), ".env")
 
@@ -80,7 +75,7 @@ def check_environment() -> dict:
 def print_health_report():
     print("\n🔍 正在進行本地端環境健康檢查...")
     st = check_environment()
-    time.sleep(0.3)
+    time.sleep(0.2)
 
     print("-" * 65)
     # Python
@@ -116,11 +111,7 @@ def print_health_report():
     print("-" * 65)
 
 
-def interactive_setup_env():
-    """互動式填寫設定並生成 .env"""
-    print("\n🛠️ 【互動式參數設定精靈】")
-    print("請依序填寫參數（若不需要該功能，直接按 Enter 略過即可）：\n")
-
+def read_current_env() -> dict:
     current_env = {}
     if os.path.exists(ENV_PATH):
         try:
@@ -132,86 +123,161 @@ def interactive_setup_env():
                         current_env[k.strip()] = v.strip()
         except Exception:
             pass
+    return current_env
 
-    # 1. Google Drive 設定
-    print("☁️ --- [1. Google Drive 雲端備份設定 (選填)] ---")
-    gas_def = current_env.get("GDRIVE_UPLOAD_URL", "")
-    folder_def = current_env.get("GDRIVE_FOLDER_ID", "")
 
-    print("👉 請輸入 Google Apps Script Web App URL (結尾為 /exec)：")
-    if gas_def:
-        print(f"   (目前設定: {gas_def[:30]}... 按 Enter 維持不變)")
-    gas_url = input("GDRIVE_UPLOAD_URL > ").strip() or gas_def
-
-    print("👉 請輸入 Google Drive 目標資料夾 ID (網址列 folders/ 後方字串)：")
-    if folder_def:
-        print(f"   (目前設定: {folder_def} 按 Enter 維持不變)")
-    folder_id = input("GDRIVE_FOLDER_ID > ").strip() or folder_def
-
-    # 2. Telegram 設定
-    print("\n📱 --- [2. Telegram 即時推播設定 (選填)] ---")
-    tg_token_def = current_env.get("TELEGRAM_BOT_TOKEN", "")
-    tg_chat_def = current_env.get("TELEGRAM_CHAT_ID", "")
-
-    print("👉 請輸入 Telegram Bot Token (由 @BotFather 提供)：")
-    if tg_token_def:
-        print(f"   (目前設定: {tg_token_def[:10]}... 按 Enter 維持不變)")
-    tg_token = input("TELEGRAM_BOT_TOKEN > ").strip() or tg_token_def
-
-    print("👉 請輸入 Telegram Chat ID (由 @userinfobot 提供之純數字)：")
-    if tg_chat_def:
-        print(f"   (目前設定: {tg_chat_def} 按 Enter 維持不變)")
-    tg_chat = input("TELEGRAM_CHAT_ID > ").strip() or tg_chat_def
-
-    # 3. SMTP Email 設定
-    print("\n📧 --- [3. Gmail SMTP 郵件報表設定 (選填)] ---")
-    smtp_user_def = current_env.get("SMTP_USER", "")
-    smtp_pass_def = current_env.get("SMTP_PASSWORD", "")
-    receiver_def = current_env.get("RECEIVER_EMAIL", "")
-
-    print("👉 請輸入寄件 Gmail 信箱：")
-    if smtp_user_def:
-        print(f"   (目前設定: {smtp_user_def} 按 Enter 維持不變)")
-    smtp_user = input("SMTP_USER > ").strip() or smtp_user_def
-
-    print("👉 請輸入 Google 16 位應用程式密碼 (非一般登入密碼)：")
-    if smtp_pass_def:
-        print(f"   (目前已設定 16 位密碼，按 Enter 維持不變)")
-    smtp_pass = input("SMTP_PASSWORD > ").strip() or smtp_pass_def
-
-    print("👉 請輸入收件 Email (若與寄件者相同可留空)：")
-    if receiver_def:
-        print(f"   (目前設定: {receiver_def} 按 Enter 維持不變)")
-    receiver_email = input("RECEIVER_EMAIL > ").strip() or receiver_def or smtp_user
-
-    # 寫入 .env
+def save_env_file(env_data: dict):
     env_content = f"""# ==========================================
 # 台股券商分點爬蟲系統 — 本地環境變數設定檔
-# 建立時間: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+# 更新時間: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
 # ==========================================
 
 # Google Drive 雲端同步
-GDRIVE_UPLOAD_URL={gas_url}
-GDRIVE_FOLDER_ID={folder_id}
+GDRIVE_UPLOAD_URL={env_data.get('GDRIVE_UPLOAD_URL', '')}
+GDRIVE_FOLDER_ID={env_data.get('GDRIVE_FOLDER_ID', '')}
 
 # Telegram 即時推播
-TELEGRAM_BOT_TOKEN={tg_token}
-TELEGRAM_CHAT_ID={tg_chat}
+TELEGRAM_BOT_TOKEN={env_data.get('TELEGRAM_BOT_TOKEN', '')}
+TELEGRAM_CHAT_ID={env_data.get('TELEGRAM_CHAT_ID', '')}
 
 # SMTP 郵件通知
-SMTP_SERVER=smtp.gmail.com
-SMTP_PORT=587
-SMTP_USER={smtp_user}
-SMTP_PASSWORD={smtp_pass}
-RECEIVER_EMAIL={receiver_email}
+SMTP_SERVER={env_data.get('SMTP_SERVER', 'smtp.gmail.com')}
+SMTP_PORT={env_data.get('SMTP_PORT', '587')}
+SMTP_USER={env_data.get('SMTP_USER', '')}
+SMTP_PASSWORD={env_data.get('SMTP_PASSWORD', '')}
+RECEIVER_EMAIL={env_data.get('RECEIVER_EMAIL', '')}
 """
-
     with open(ENV_PATH, "w", encoding="utf-8") as f:
         f.write(env_content)
 
+
+def interactive_setup_env():
+    """互動式填寫設定並生成/更新 .env"""
+    print("\n🛠️ 【環境變數與參數設定】")
+    current_env = read_current_env()
+
+    if current_env:
+        print("📋 目前已存在的設定摘要：")
+        gas = current_env.get("GDRIVE_UPLOAD_URL", "")
+        fld = current_env.get("GDRIVE_FOLDER_ID", "")
+        tg_t = current_env.get("TELEGRAM_BOT_TOKEN", "")
+        tg_c = current_env.get("TELEGRAM_CHAT_ID", "")
+        smtp_u = current_env.get("SMTP_USER", "")
+        smtp_p = "***" if current_env.get("SMTP_PASSWORD") else ""
+        rcv = current_env.get("RECEIVER_EMAIL", "")
+
+        print(f"  ☁️ Google Drive : {'已設定 URL' if gas else '未設定'} | 資料夾 ID: {fld or '未設定'}")
+        print(f"  📱 Telegram     : Token: {tg_t[:8]+'...' if tg_t else '未設定'} | Chat ID: {tg_c or '未設定'}")
+        print(f"  📧 SMTP Email   : 寄件: {smtp_u or '未設定'} | 密碼: {smtp_p} | 收件: {rcv or '未設定'}")
+        print("-" * 65)
+
+        print("請選擇操作：")
+        print("  0. 🚀 【全部略過 (Bypass)】維持目前設定，直接返回主選單")
+        print("  1. ✏️ 重新完整設定所有項目 (依序填寫)")
+        print("  2. ☁️ 僅修改 Google Drive 設定")
+        print("  3. 📱 僅修改 Telegram 設定")
+        print("  4. 📧 僅修改 Gmail SMTP 設定")
+
+        sub_c = input("\n請選擇 (0-4，預設 0 跳過) > ").strip()
+        if not sub_c or sub_c == "0":
+            print("\n[✓] 已跳過 (Bypass)，維持既有設定！")
+            return
+        elif sub_c == "2":
+            _setup_gdrive_part(current_env)
+            save_env_file(current_env)
+            print("\n🎉 [成功] Google Drive 設定已更新！")
+            return
+        elif sub_c == "3":
+            _setup_telegram_part(current_env)
+            save_env_file(current_env)
+            print("\n🎉 [成功] Telegram 設定已更新！")
+            return
+        elif sub_c == "4":
+            _setup_email_part(current_env)
+            save_env_file(current_env)
+            print("\n🎉 [成功] Email 設定已更新！")
+            return
+
+    # 完整循序設定
+    print("\n👉 請依序填寫參數（按 Enter 保留原值 / 輸入 clear 清空）：\n")
+    _setup_gdrive_part(current_env)
+    _setup_telegram_part(current_env)
+    _setup_email_part(current_env)
+
+    save_env_file(current_env)
     print("\n" + "=" * 65)
-    print(f"🎉 [成功] 已成功生成環境變數設定檔: {ENV_PATH}")
+    print(f"🎉 [成功] 已成功儲存設定檔: {ENV_PATH}")
     print("=" * 65)
+
+
+def _setup_gdrive_part(env_data: dict):
+    print("☁️ --- [Google Drive 雲端備份設定] ---")
+    gas_def = env_data.get("GDRIVE_UPLOAD_URL", "")
+    folder_def = env_data.get("GDRIVE_FOLDER_ID", "")
+
+    print("👉 Google Apps Script Web App URL (結尾為 /exec)：")
+    if gas_def:
+        print(f"   [目前: {gas_def[:35]}...]")
+    val = input("GDRIVE_UPLOAD_URL (按 Enter 保留原值) > ").strip()
+    if val.lower() == "clear": env_data["GDRIVE_UPLOAD_URL"] = ""
+    elif val: env_data["GDRIVE_UPLOAD_URL"] = val
+
+    print("👉 Google Drive 目標資料夾 ID (網址列 folders/ 後方字串)：")
+    if folder_def:
+        print(f"   [目前: {folder_def}]")
+    val = input("GDRIVE_FOLDER_ID (按 Enter 保留原值) > ").strip()
+    if val.lower() == "clear": env_data["GDRIVE_FOLDER_ID"] = ""
+    elif val: env_data["GDRIVE_FOLDER_ID"] = val
+
+
+def _setup_telegram_part(env_data: dict):
+    print("\n📱 --- [Telegram 即時推播設定] ---")
+    tg_token_def = env_data.get("TELEGRAM_BOT_TOKEN", "")
+    tg_chat_def = env_data.get("TELEGRAM_CHAT_ID", "")
+
+    print("👉 Telegram Bot Token (由 @BotFather 提供)：")
+    if tg_token_def:
+        print(f"   [目前: {tg_token_def[:10]}...]")
+    val = input("TELEGRAM_BOT_TOKEN (按 Enter 保留原值) > ").strip()
+    if val.lower() == "clear": env_data["TELEGRAM_BOT_TOKEN"] = ""
+    elif val: env_data["TELEGRAM_BOT_TOKEN"] = val
+
+    print("👉 Telegram Chat ID (由 @userinfobot 提供之純數字)：")
+    if tg_chat_def:
+        print(f"   [目前: {tg_chat_def}]")
+    val = input("TELEGRAM_CHAT_ID (按 Enter 保留原值) > ").strip()
+    if val.lower() == "clear": env_data["TELEGRAM_CHAT_ID"] = ""
+    elif val: env_data["TELEGRAM_CHAT_ID"] = val
+
+
+def _setup_email_part(env_data: dict):
+    print("\n📧 --- [Gmail SMTP 郵件報表設定] ---")
+    smtp_user_def = env_data.get("SMTP_USER", "")
+    smtp_pass_def = env_data.get("SMTP_PASSWORD", "")
+    receiver_def = env_data.get("RECEIVER_EMAIL", "")
+
+    print("👉 寄件 Gmail 信箱：")
+    if smtp_user_def:
+        print(f"   [目前: {smtp_user_def}]")
+    val = input("SMTP_USER (按 Enter 保留原值) > ").strip()
+    if val.lower() == "clear": env_data["SMTP_USER"] = ""
+    elif val: env_data["SMTP_USER"] = val
+
+    print("👉 Google 16 位應用程式密碼 (非一般登入密碼)：")
+    if smtp_pass_def:
+        print(f"   [目前已設定 16 位密碼]")
+    val = input("SMTP_PASSWORD (按 Enter 保留原值) > ").strip()
+    if val.lower() == "clear": env_data["SMTP_PASSWORD"] = ""
+    elif val: env_data["SMTP_PASSWORD"] = val
+
+    print("👉 收件 Email (若與寄件者相同可按 Enter)：")
+    if receiver_def:
+        print(f"   [目前: {receiver_def}]")
+    val = input("RECEIVER_EMAIL (按 Enter 保留原值) > ").strip()
+    if val.lower() == "clear": env_data["RECEIVER_EMAIL"] = ""
+    elif val: env_data["RECEIVER_EMAIL"] = val
+    elif not env_data.get("RECEIVER_EMAIL"):
+        env_data["RECEIVER_EMAIL"] = env_data.get("SMTP_USER", "")
 
 
 def run_quick_test():
