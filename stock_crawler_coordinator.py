@@ -33,6 +33,37 @@ def get_taipei_now() -> datetime:
     return datetime.now(timezone.utc).astimezone(TAIPEI_TZ)
 
 
+class TeeLogger:
+    """同時輸出至控制台與帶有時間戳的日誌檔案 (UTF-8)"""
+    def __init__(self, log_filepath: str):
+        self.terminal = sys.stdout
+        self.log_file = open(log_filepath, "a", encoding="utf-8", buffering=1)
+
+    def write(self, message):
+        try:
+            self.terminal.write(message)
+        except Exception:
+            pass
+        try:
+            self.log_file.write(message)
+        except Exception:
+            pass
+
+    def flush(self):
+        try:
+            self.terminal.flush()
+        except Exception:
+            pass
+        try:
+            self.log_file.flush()
+        except Exception:
+            pass
+
+    def close(self):
+        if not self.log_file.closed:
+            self.log_file.close()
+
+
 def load_stock_name_map() -> Dict[str, str]:
     """載入股票名稱對照快取"""
     map_path = os.path.join(os.path.dirname(__file__), "stock_name_map.json")
@@ -293,17 +324,40 @@ def main():
     parser.add_argument("--num-shards", type=int, default=1, help="分散式總分片數 (預設 1)")
 
     args = parser.parse_args()
-    run_full_market_crawler(
-        trade_date=args.date,
-        markets=args.market,
-        workers=args.workers,
-        max_rounds=args.max_rounds,
-        output_dir=args.output_dir,
-        export_excel=not args.no_excel,
-        receiver_email=args.email,
-        shard_id=args.shard_id,
-        num_shards=args.num_shards
-    )
+
+    # 自動建立 logs/ 資料夾並啟用帶有時間戳的日誌記錄
+    logs_dir = os.path.join(os.path.dirname(__file__), "logs")
+    os.makedirs(logs_dir, exist_ok=True)
+    ts_str = get_taipei_now().strftime("%Y%m%d_%H%M%S")
+    market_tag = args.market
+    log_filename = f"crawler_{market_tag}_{ts_str}.log"
+    log_filepath = os.path.join(logs_dir, log_filename)
+
+    tee_logger = TeeLogger(log_filepath)
+    orig_stdout = sys.stdout
+    orig_stderr = sys.stderr
+    sys.stdout = tee_logger
+    sys.stderr = tee_logger
+
+    try:
+        print(f"[*] [日誌系統] 執行日誌檔案已建立: {log_filepath}")
+        sys.stdout.flush()
+
+        run_full_market_crawler(
+            trade_date=args.date,
+            markets=args.market,
+            workers=args.workers,
+            max_rounds=args.max_rounds,
+            output_dir=args.output_dir,
+            export_excel=not args.no_excel,
+            receiver_email=args.email,
+            shard_id=args.shard_id,
+            num_shards=args.num_shards
+        )
+    finally:
+        sys.stdout = orig_stdout
+        sys.stderr = orig_stderr
+        tee_logger.close()
 
 
 if __name__ == "__main__":
