@@ -170,7 +170,7 @@ def _mp_local_worker_task(
                         except Exception: pass
 
                     found_csv = None
-                    for _ in range(25):  # 延長至 25 次輪詢 (約 7.5 秒) 以因應伺服器排隊
+                    for _ in range(25):  # 輪詢等待 CSV 下載落盤
                         time.sleep(0.3)
                         if glob.glob(os.path.join(save_dir, "*.crdownload")):
                             continue
@@ -190,9 +190,9 @@ def _mp_local_worker_task(
                         try: os.remove(found_csv)
                         except OSError: pass
                     else:
-                        # 檢查是否為當日無成交標的
-                        has_trade = bool(page.ele("css:table tbody tr", timeout=1))
-                        if not has_trade:
+                        # 檢查頁面是否明確提示查無資料
+                        no_data_msg = bool(page.ele("text:查無符合條件之資料", timeout=0.3) or page.ele("text:查無資料", timeout=0.3))
+                        if no_data_msg:
                             print(f"[{ts_res}]   [Worker-{worker_id} {idx}/{worker_total}] [無成交/略過] {sym}")
                         else:
                             failed_symbols.append(sym)
