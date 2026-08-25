@@ -83,21 +83,28 @@ def _mp_local_worker_task(
             success_crawl = False
             for attempt in range(1, 4):
                 try:
-                    # 1. 確保在 BrokerBS 頁面
-                    cur_url = page.url or ""
-                    cur_title = page.title or ""
+                    # 1. 確保在 BrokerBS 頁面 (若斷線自動重啟 Chrome)
+                    try:
+                        cur_url = page.url or ""
+                        cur_title = page.title or ""
+                    except Exception:
+                        try: page.quit()
+                        except Exception: pass
+                        page = ChromiumPage(co)
+                        page.set.download_path(save_dir)
+                        page.get(tpex_url, retry=3, timeout=30)
+                        time.sleep(2.5)
+                        cur_url = page.url or ""
+                        cur_title = page.title or ""
+
                     if "brokerBS.html" not in cur_url or "520" in cur_title or "Error" in cur_title or "unknown error" in cur_title:
                         page.get(tpex_url, retry=3, timeout=25)
                         time.sleep(2.0)
-                        try: page.run_js("if (typeof turnstile !== 'undefined') { turnstile.execute(); }")
-                        except Exception: pass
 
                     stk_input = page.ele("css:input.code", timeout=4) or page.ele("@name=code", timeout=4)
                     if not stk_input:
                         page.get(tpex_url, retry=2, timeout=20)
                         time.sleep(2.0)
-                        try: page.run_js("if (typeof turnstile !== 'undefined') { turnstile.execute(); }")
-                        except Exception: pass
                         stk_input = page.ele("css:input.code", timeout=5) or page.ele("@name=code", timeout=5)
                         if not stk_input:
                             continue
@@ -105,26 +112,26 @@ def _mp_local_worker_task(
                     stk_input.input(sym, clear=True, by_js=True)
                     time.sleep(0.1)
 
-                    # 2. 點擊查詢按鈕並激活 Turnstile
-                    q_btn = page.ele("xpath://div[contains(@class,'formblock')]//button[contains(text(),'查詢')]") or page.ele("css:form.formblock button[type=submit]") or page.ele("text:查詢")
+                    # 2. 換發全新的 Turnstile Token (防止 Token 消耗後失效)
+                    try:
+                        page.run_js("if (typeof turnstile !== 'undefined') { try { turnstile.reset(); } catch(e){} try { turnstile.execute(); } catch(e){} }")
+                        for _ in range(25):
+                            time.sleep(0.08)
+                            tok = page.run_js("return document.querySelector('[name=cf-turnstile-response]') ? document.querySelector('[name=cf-turnstile-response]').value : '';")
+                            if tok and len(tok) > 20:
+                                break
+                    except Exception:
+                        pass
+
+                    # 3. 點擊查詢按鈕
+                    q_btn = page.ele('xpath://form//button[@type="submit"]') or page.ele("css:form.formblock button[type=submit]") or page.ele("text:查詢")
                     if q_btn:
                         try: q_btn.click(by_js=True)
                         except Exception:
                             try: q_btn.click()
                             except Exception: pass
 
-                    # 激活並等待 Turnstile Token
-                    try:
-                        page.run_js("if (typeof turnstile !== 'undefined') { turnstile.execute(); }")
-                        for _ in range(15):
-                            time.sleep(0.08)
-                            tok = page.run_js("return document.querySelector('[name=cf-turnstile-response]') ? document.querySelector('[name=cf-turnstile-response]').value : '';")
-                            if tok and len(tok) > 10:
-                                break
-                    except Exception:
-                        pass
-
-                    time.sleep(0.3)
+                    time.sleep(0.4)
 
                     # 檢查是否明確查無資料
                     no_data_msg = bool(page.ele("text:查無符合條件之資料", timeout=0.3) or page.ele("text:查無資料", timeout=0.3))
@@ -134,17 +141,16 @@ def _mp_local_worker_task(
                         success_crawl = True
                         break
 
-                    # 3. 點擊 [下載 CSV (UTF-8)] 按鈕 (全量數據)
-                    d_btn = page.ele("xpath://button[contains(text(),'UTF-8')]") or page.ele("text:下載 CSV (UTF-8)") or page.ele("text:下載 CSV")
+                    # 4. 點擊 [下載 CSV (UTF-8)] 按鈕 (全量數據)
+                    d_btn = page.ele('css:button[data-format="utf-8"]') or page.ele("xpath://button[contains(text(),'UTF-8')]") or page.ele("text:下載 CSV (UTF-8)")
                     found_csv = None
                     if d_btn:
-                        try:
-                            d_btn.click(by_js=True)
+                        try: d_btn.click(by_js=True)
                         except Exception:
                             try: d_btn.click()
                             except Exception: pass
 
-                        for _ in range(30):  # 輪詢等待 CSV 下載落盤
+                        for _ in range(25):  # 輪詢等待 CSV 下載落盤
                             time.sleep(0.25)
                             if glob.glob(os.path.join(save_dir, "*.crdownload")):
                                 continue
@@ -170,16 +176,27 @@ def _mp_local_worker_task(
                         except OSError: pass
 
                     if attempt < 3:
-                        time.sleep(1.0)
+                        time.sleep(1.2)
 
                 except Exception as e:
+                    # 發生瀏覽器連線斷開時，自動重啟瀏覽器
+                    if "Disconnected" in str(type(e)) or "Connection" in str(type(e)):
+                        try: page.quit()
+                        except Exception: pass
+                        page = ChromiumPage(co)
+                        page.set.download_path(save_dir)
+                        page.get(tpex_url, retry=3, timeout=30)
+                        time.sleep(2.5)
+
                     if attempt < 3:
-                        time.sleep(1.0)
+                        time.sleep(1.2)
 
             if not success_crawl:
                 ts_res = datetime.now().strftime("%H:%M:%S")
                 failed_symbols.append(sym)
                 print(f"[{ts_res}]   [Worker-{worker_id} {idx}/{worker_total}] [採集失敗/已記錄待補抓] {sym}")
+
+            sys.stdout.flush()
 
             sys.stdout.flush()
 
