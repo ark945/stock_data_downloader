@@ -48,29 +48,13 @@ def _mp_local_worker_task(
     port = 9500 + worker_id
     save_dir = os.path.join(download_dir, f"worker_dl_{worker_id}")
     os.makedirs(save_dir, exist_ok=True)
-    temp_user_data = tempfile.mkdtemp(prefix=f"tpex_u_{worker_id}_")
 
     co = ChromiumOptions()
-    co.set_local_port(port)
-    co.set_user_data_path(temp_user_data)
-    if sys.platform.startswith("linux"):
-        for bin_p in ["/usr/bin/chromium-browser", "/usr/bin/chromium", "/usr/bin/google-chrome"]:
-            if os.path.exists(bin_p):
-                co.set_paths(browser_path=bin_p)
-                break
-
-    co.set_argument("--no-sandbox")
-    co.set_argument("--disable-gpu")
-    co.set_argument("--disable-dev-shm-usage")
-    co.set_argument("--disable-infobars")
-    co.set_argument("--window-size=1280,800")
-    co.set_argument("--excludeSwitches", "enable-automation")
-    co.set_argument("--useAutomationExtension", False)
-
+    if worker_id > 1:
+        co.set_local_port(port)
     co.set_pref("profile.default_content_setting_values.automatic_downloads", 1)
     co.set_pref("download.default_directory", save_dir)
     co.set_pref("download.prompt_for_download", False)
-    co.set_pref("safebrowsing.enabled", True)
 
     page = None
     collected_dfs = []
@@ -79,7 +63,7 @@ def _mp_local_worker_task(
     crawler = TPEXLocalCrawler(download_dir=download_dir)
 
     try:
-        page = ChromiumPage(addr_or_opts=co)
+        page = ChromiumPage(co)
         page.set.download_path(save_dir)
         try:
             page.download.set.show_msg(False)
@@ -218,7 +202,6 @@ def _mp_local_worker_task(
         if page:
             try: page.quit()
             except Exception: pass
-        shutil.rmtree(temp_user_data, ignore_errors=True)
         shutil.rmtree(save_dir, ignore_errors=True)
 
     result_queue.put((collected_dfs, failed_symbols))
