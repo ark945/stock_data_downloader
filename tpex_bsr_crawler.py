@@ -38,8 +38,12 @@ class TPEXBrokerCrawler:
         """取得全市場上櫃標的清單"""
         return TPEXLocalCrawler.get_all_tpex_symbols()
 
+    def parse_tpex_json_to_dataframe(self, json_data: dict, stock_id: str, trade_date: str) -> Optional[pd.DataFrame]:
+        """解析 TPEX API JSON 為標準 13 欄位 DataFrame"""
+        return self.local_engine.parse_tpex_json_to_dataframe(json_data, stock_id, trade_date)
+
     def parse_tpex_csv_to_dataframe(self, csv_file_or_text, stock_id: str, trade_date: str) -> Optional[pd.DataFrame]:
-        """解析 TPEX CSV 為標準 13 欄位 DataFrame"""
+        """向下相容：解析 TPEX CSV 為標準 13 欄位 DataFrame"""
         return self.local_engine.parse_tpex_csv_to_dataframe(csv_file_or_text, stock_id, trade_date)
 
     def crawl_stocks_with_retry(
