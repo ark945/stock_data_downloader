@@ -84,15 +84,15 @@ def _mp_local_worker_task(
             pass
 
         for idx, sym in enumerate(symbols, 1):
+            # 1. 換新標的時清理舊 CSV 檔案 (避免重試時誤刪正在寫入的檔案)
+            for old_f in glob.glob(os.path.join(save_dir, "*")):
+                try: os.remove(old_f)
+                except OSError: pass
+
             # 單檔標的閉環採集 (含最多 3 次原地重試 + DOM 備援，絕不放任通過)
             success_crawl = False
             for attempt in range(1, 4):
                 try:
-                    # 1. 清理舊 CSV
-                    for old_f in glob.glob(os.path.join(save_dir, "*")):
-                        try: os.remove(old_f)
-                        except OSError: pass
-
                     # 2. 確保在 BrokerBS 頁面
                     cur_url = page.url or ""
                     cur_title = page.title or ""
