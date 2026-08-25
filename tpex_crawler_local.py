@@ -141,14 +141,24 @@ def _mp_local_worker_task(
                 try:
                     page.run_js("if (typeof turnstile !== 'undefined') { turnstile.execute(); }")
                     for _ in range(12):
-                        time.sleep(0.15)
+                        time.sleep(0.1)
                         tok = page.run_js("return document.querySelector('[name=cf-turnstile-response]') ? document.querySelector('[name=cf-turnstile-response]').value : '';")
                         if tok and len(tok) > 10:
                             break
                 except Exception:
                     pass
 
-                time.sleep(0.5)
+                time.sleep(0.4)
+
+                # 檢查是否有無成交訊息
+                has_no_data = bool(page.ele("text:查無符合條件之資料", timeout=0.5) or page.ele("text:查無資料", timeout=0.5))
+                has_table_rows = bool(page.ele("css:table tbody tr", timeout=0.5))
+
+                if has_no_data or (not has_table_rows and not page.ele("xpath://button[contains(text(),'UTF-8')]", timeout=0.5)):
+                    ts_res = datetime.now().strftime("%H:%M:%S")
+                    print(f"[{ts_res}]   [Worker-{worker_id} {idx}/{worker_total}] [無成交/略過] {sym}")
+                    sys.stdout.flush()
+                    continue
 
                 # 4. 點擊 [下載 CSV (UTF-8)] 按鈕 (全量數據)
                 d_btn = page.ele("xpath://button[contains(text(),'UTF-8')]") or page.ele("text:下載 CSV (UTF-8)") or page.ele("text:下載 CSV")
@@ -160,7 +170,7 @@ def _mp_local_worker_task(
                         except Exception: pass
 
                     found_csv = None
-                    for _ in range(14):
+                    for _ in range(25):  # 延長至 25 次輪詢 (約 7.5 秒) 以因應伺服器排隊
                         time.sleep(0.3)
                         if glob.glob(os.path.join(save_dir, "*.crdownload")):
                             continue
