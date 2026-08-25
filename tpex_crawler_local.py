@@ -105,33 +105,34 @@ def _mp_local_worker_task(
                             continue
 
                     stk_input.input(sym, clear=True, by_js=True)
+                    time.sleep(0.1)
 
-                    # 2. 快速換發全新 Turnstile Token (0.03s 高頻輪詢)
+                    # 2. 換發全新 Turnstile Token (給足充足窗口，一生成立即 break)
                     try:
                         page.run_js("if (typeof turnstile !== 'undefined') { try { turnstile.reset(); } catch(e){} try { turnstile.execute(); } catch(e){} }")
-                        for _ in range(30):
-                            time.sleep(0.03)
+                        for _ in range(25):
+                            time.sleep(0.1)
                             tok = page.run_js("return document.querySelector('[name=cf-turnstile-response]') ? document.querySelector('[name=cf-turnstile-response]').value : '';")
                             if tok and len(tok) > 20:
                                 break
                     except Exception:
                         pass
 
-                    # 3. 清空監聽佇列並點擊查詢按鈕
+                    # 3. 清空監聽佇列並點擊查詢按鈕 (精準鎖定 formblock 內部)
                     page.listen.clear()
-                    page.run_js("""
-                        const btn = document.querySelector('div.formblock button[type="submit"]') || 
-                                    document.querySelector('form.formblock button[type="submit"]') ||
-                                    Array.from(document.querySelectorAll('div.formblock button, form.formblock button')).find(b => (b.innerText||'').includes('查詢'));
-                        if (btn) btn.click();
-                    """)
+                    q_btn = page.ele("xpath://div[contains(@class,'formblock')]//button[contains(text(),'查詢')]") or page.ele("css:div.formblock button[type=submit]") or page.ele("css:form.formblock button[type=submit]")
+                    if q_btn:
+                        try: q_btn.click(by_js=True)
+                        except Exception:
+                            try: q_btn.click()
+                            except Exception: pass
 
-                    pkt = page.listen.wait(timeout=6)
+                    pkt = page.listen.wait(timeout=12)
                     ts_res = datetime.now().strftime("%H:%M:%S")
 
                     if not pkt:
                         if attempt < 3:
-                            time.sleep(0.5)
+                            time.sleep(1.0)
                         continue
 
                     body = pkt.response.body
