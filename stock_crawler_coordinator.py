@@ -102,12 +102,12 @@ def format_duration(seconds: float) -> str:
 
 def get_latest_trading_date() -> str:
     """
-    精確計算台股最新交易日：
+    精確計算台股最新交易日 (官方於每日 16:00 提供最新券商日報表)：
     - 週六 (5)：退回週五 (-1 天)
     - 週日 (6)：退回週五 (-2 天)
-    - 週一 (0) 且未過 18:00 (盤前/盤中)：退回上週五 (-3 天)
-    - 週二至週五 (1~4) 且未過 18:00：退回前一天 (-1 天)
-    - 週一至週五 且已過 18:00 (盤後就緒)：當天 (-0 天)
+    - 週一 (0) 且未過 16:00 (盤前/盤中)：退回上週五 (-3 天)
+    - 週二至週五 (1~4) 且未過 16:00：退回前一天 (-1 天)
+    - 週一至週五 且已過 16:00 (盤後已就緒)：當天 (-0 天)
     """
     now = get_taipei_now()
     w = now.weekday()
@@ -116,9 +116,9 @@ def get_latest_trading_date() -> str:
     elif w == 6:
         delta = 2
     elif w == 0:
-        delta = 0 if now.hour >= 18 else 3
+        delta = 0 if now.hour >= 16 else 3
     else:
-        delta = 0 if now.hour >= 18 else 1
+        delta = 0 if now.hour >= 16 else 1
     return (now - pd.Timedelta(days=delta)).strftime("%Y-%m-%d")
 
 
