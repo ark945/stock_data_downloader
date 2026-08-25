@@ -475,11 +475,14 @@ class TPEXLocalCrawler:
             except Exception:
                 pass
 
-        # 更新 Checkpoint 總快取
+        # 更新 Checkpoint 總快取並自動清空暫存檔案
         if collected_dfs:
             try:
                 all_df = pd.concat(collected_dfs, ignore_index=True)
                 all_df.to_parquet(cp_file, index=False)
+                # 合併成功後，自動清空暫存檔案，磁碟不留垃圾
+                for w_dir in glob.glob(os.path.join(self.download_dir, "worker_dl_*")):
+                    shutil.rmtree(w_dir, ignore_errors=True)
             except Exception:
                 pass
 
