@@ -357,6 +357,10 @@ class TPEXLocalCrawler:
         workers = min(max(workers, 1), 8, len(stock_codes))
         print(f"[*] [啟動] TPEX 本地端極速多進程引擎 ({workers} 個獨立 Workers 並行採集)...")
 
+        # 淨空舊 worker 下載暫存目錄避免干擾
+        for w_dir in glob.glob(os.path.join(self.download_dir, "worker_dl_*")):
+            shutil.rmtree(w_dir, ignore_errors=True)
+
         # 斷點續傳檢查：讀取已存在於 checkpoint 的資料
         cp_file = os.path.join(self.checkpoint_dir, f"cp_{trade_date}.parquet")
         cached_dfs = []
