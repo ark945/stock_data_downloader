@@ -128,6 +128,9 @@ def _mp_local_worker_task(
                             df = crawler.parse_tpex_json_to_dataframe(body, sym, trade_date)
                             if df is not None and not df.empty:
                                 collected_dfs.append(df)
+                                # 即時儲存單檔暫存 (防 Pipe 爆裂與資料遺失)
+                                sym_pq = os.path.join(save_dir, f"{sym}.parquet")
+                                df.to_parquet(sym_pq, index=False)
                                 print(f"[{ts_res}]   [Worker-{worker_id} {idx}/{worker_total}] [OK] {sym} ({len(df)} 筆全量)")
                             else:
                                 print(f"[{ts_res}]   [Worker-{worker_id} {idx}/{worker_total}] [無成交/略過] {sym}")
@@ -164,7 +167,7 @@ def _mp_local_worker_task(
             try: page.quit()
             except Exception: pass
 
-    result_queue.put((collected_dfs, failed_symbols))
+    result_queue.put((failed_symbols,))
 
 
 class TPEXLocalCrawler:
@@ -452,9 +455,9 @@ class TPEXLocalCrawler:
 
         for _ in range(len(processes)):
             try:
-                dfs, failed = result_queue.get(timeout=1800)
-                collected_dfs.extend(dfs)
-                failed_symbols.extend(failed)
+                res = result_queue.get(timeout=1800)
+                if res and isinstance(res, tuple) and len(res) == 1:
+                    failed_symbols.extend(res[0])
             except Exception:
                 pass
 
@@ -463,7 +466,16 @@ class TPEXLocalCrawler:
             if p.is_alive():
                 p.terminate()
 
-        # 更新快取
+        # 從實體磁碟載入所有 Worker 採集的 Parquet 檔案 (100% 杜絕 Pipe 阻塞丟失)
+        for w_pq in glob.glob(os.path.join(self.download_dir, "worker_dl_*", "*.parquet")):
+            try:
+                df_item = pd.read_parquet(w_pq)
+                if not df_item.empty:
+                    collected_dfs.append(df_item)
+            except Exception:
+                pass
+
+        # 更新 Checkpoint 總快取
         if collected_dfs:
             try:
                 all_df = pd.concat(collected_dfs, ignore_index=True)
