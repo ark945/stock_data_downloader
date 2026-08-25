@@ -350,21 +350,27 @@ class TPEXCloudCrawler:
                     stk_input.input(sym)
                     time.sleep(0.1)
 
-                    # 等待 Turnstile Token 產生
-                    for _ in range(20):
-                        tok = page.run_js("return (document.querySelector('input[name=\"cf-turnstile-response\"]') || {}).value || ''")
-                        if tok and len(tok) > 20:
-                            break
-                        time.sleep(0.2)
+                    # 2. 換發全新的 Turnstile Token (防止 Token 消耗後失效)
+                    try:
+                        page.run_js("if (typeof turnstile !== 'undefined') { try { turnstile.reset(); } catch(e){} try { turnstile.execute(); } catch(e){} }")
+                        for _ in range(25):
+                            time.sleep(0.1)
+                            tok = page.run_js("return document.querySelector('[name=cf-turnstile-response]') ? document.querySelector('[name=cf-turnstile-response]').value : '';")
+                            if tok and len(tok) > 20:
+                                break
+                    except Exception:
+                        pass
 
+                    # 3. 清空監聽佇列並點擊查詢按鈕
                     page.listen.clear()
-                    page.run_js("""
-                        const els = Array.from(document.querySelectorAll('button, a'));
-                        const t = els.find(e => (e.innerText || '').trim() === '查詢');
-                        if (t) t.click();
-                    """)
+                    q_btn = page.ele('xpath://form//button[@type="submit"]') or page.ele("css:form.formblock button[type=submit]") or page.ele("text:查詢")
+                    if q_btn:
+                        try: q_btn.click(by_js=True)
+                        except:
+                            try: q_btn.click()
+                            except: pass
 
-                    pkt = page.listen.wait(timeout=15)
+                    pkt = page.listen.wait(timeout=12)
                     ts_res = get_taipei_now().strftime("%H:%M:%S")
 
                     if not pkt:
@@ -393,12 +399,16 @@ class TPEXCloudCrawler:
                         elif str(body.get("status")) == "520" or "520" in str(body.get("title", "")):
                             failed_symbols.append(sym)
                             print(f"[{ts_res}]   [上櫃 {idx}/{total}] [CF 520 阻擋] {sym}")
-                            time.sleep(3.0)
-                        elif "stat" in body and ("查無" in body["stat"] or "無交易" in body["stat"]):
+                            time.sleep(2.0)
+                        elif "stat" in body and ("查無" in body["stat"] or "無交易" in body["stat"] or "無符合" in body["stat"]):
                             print(f"[{ts_res}]   [上櫃 {idx}/{total}] [無成交/略過] {sym}")
                         else:
                             failed_symbols.append(sym)
-                            print(f"[{ts_res}]   [上櫃 {idx}/{total}] [非預期回應] {sym}")
+                            stat_msg = body.get("stat") or body.get("message") or str(body)[:60]
+                            print(f"[{ts_res}]   [上櫃 {idx}/{total}] [非預期回應: {stat_msg}] {sym}")
+                            # 觸發頁面刷新重建 Token 狀態
+                            page.get(self.TPEX_URL, retry=2, timeout=20)
+                            time.sleep(2.0)
                     else:
                         failed_symbols.append(sym)
                         print(f"[{ts_res}]   [上櫃 {idx}/{total}] [解析失敗] {sym}")
