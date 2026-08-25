@@ -47,10 +47,15 @@ def _mp_local_worker_task(
     from DrissionPage import ChromiumPage, ChromiumOptions
 
     port = 9500 + worker_id
+    save_dir = os.path.join(download_dir, f"worker_dl_{worker_id}")
+    os.makedirs(save_dir, exist_ok=True)
 
     co = ChromiumOptions()
     if worker_id > 1:
         co.set_local_port(port)
+    co.set_pref("profile.default_content_setting_values.automatic_downloads", 1)
+    co.set_pref("download.default_directory", save_dir)
+    co.set_pref("download.prompt_for_download", False)
 
     page = None
     collected_dfs = []
@@ -60,7 +65,7 @@ def _mp_local_worker_task(
 
     try:
         page = ChromiumPage(co)
-        page.listen.start(["afterTrading", "brokerBS"])
+        page.set.download_path(save_dir)
 
         # 錯開 Worker 啟動時間
         if worker_id > 1:
@@ -70,6 +75,11 @@ def _mp_local_worker_task(
         time.sleep(2.5)
 
         for idx, sym in enumerate(symbols, 1):
+            # 換新標的時清理舊 CSV 檔案
+            for old_f in glob.glob(os.path.join(save_dir, "*.csv")):
+                try: os.remove(old_f)
+                except OSError: pass
+
             success_crawl = False
             for attempt in range(1, 4):
                 try:
@@ -79,70 +89,85 @@ def _mp_local_worker_task(
                     if "brokerBS.html" not in cur_url or "520" in cur_title or "Error" in cur_title or "unknown error" in cur_title:
                         page.get(tpex_url, retry=3, timeout=25)
                         time.sleep(2.0)
+                        try: page.run_js("if (typeof turnstile !== 'undefined') { turnstile.execute(); }")
+                        except Exception: pass
 
                     stk_input = page.ele("css:input.code", timeout=4) or page.ele("@name=code", timeout=4)
                     if not stk_input:
                         page.get(tpex_url, retry=2, timeout=20)
                         time.sleep(2.0)
+                        try: page.run_js("if (typeof turnstile !== 'undefined') { turnstile.execute(); }")
+                        except Exception: pass
                         stk_input = page.ele("css:input.code", timeout=5) or page.ele("@name=code", timeout=5)
                         if not stk_input:
                             continue
 
-                    stk_input.clear()
-                    stk_input.input(sym)
+                    stk_input.input(sym, clear=True, by_js=True)
                     time.sleep(0.1)
 
-                    # 2. 等待 Turnstile Token 產生
-                    for _ in range(20):
-                        tok = page.run_js("return (document.querySelector('input[name=\"cf-turnstile-response\"]') || {}).value || ''")
-                        if tok and len(tok) > 20:
-                            break
-                        time.sleep(0.2)
+                    # 2. 點擊查詢按鈕並激活 Turnstile
+                    q_btn = page.ele("xpath://div[contains(@class,'formblock')]//button[contains(text(),'查詢')]") or page.ele("css:form.formblock button[type=submit]") or page.ele("text:查詢")
+                    if q_btn:
+                        try: q_btn.click(by_js=True)
+                        except Exception:
+                            try: q_btn.click()
+                            except Exception: pass
 
-                    # 3. 清空監聽佇列並點擊查詢
-                    page.listen.clear()
-                    page.run_js("""
-                        const els = Array.from(document.querySelectorAll('button, a'));
-                        const t = els.find(e => (e.innerText || '').trim() === '查詢');
-                        if (t) t.click();
-                    """)
+                    # 激活並等待 Turnstile Token
+                    try:
+                        page.run_js("if (typeof turnstile !== 'undefined') { turnstile.execute(); }")
+                        for _ in range(15):
+                            time.sleep(0.08)
+                            tok = page.run_js("return document.querySelector('[name=cf-turnstile-response]') ? document.querySelector('[name=cf-turnstile-response]').value : '';")
+                            if tok and len(tok) > 10:
+                                break
+                    except Exception:
+                        pass
 
-                    # 4. 攔截 API 回應封包 (零磁碟 I/O)
-                    pkt = page.listen.wait(timeout=15)
-                    ts_res = datetime.now().strftime("%H:%M:%S")
+                    time.sleep(0.3)
 
-                    if not pkt:
-                        if attempt < 3:
-                            time.sleep(1.0)
-                        continue
+                    # 檢查是否明確查無資料
+                    no_data_msg = bool(page.ele("text:查無符合條件之資料", timeout=0.3) or page.ele("text:查無資料", timeout=0.3))
+                    if no_data_msg:
+                        ts_res = datetime.now().strftime("%H:%M:%S")
+                        print(f"[{ts_res}]   [Worker-{worker_id} {idx}/{worker_total}] [無成交/略過] {sym}")
+                        success_crawl = True
+                        break
 
-                    body = pkt.response.body
-                    if isinstance(body, str):
+                    # 3. 點擊 [下載 CSV (UTF-8)] 按鈕 (全量數據)
+                    d_btn = page.ele("xpath://button[contains(text(),'UTF-8')]") or page.ele("text:下載 CSV (UTF-8)") or page.ele("text:下載 CSV")
+                    found_csv = None
+                    if d_btn:
                         try:
-                            body = json.loads(body)
-                        except json.JSONDecodeError:
-                            body = None
+                            d_btn.click(by_js=True)
+                        except Exception:
+                            try: d_btn.click()
+                            except Exception: pass
 
-                    if isinstance(body, dict):
-                        if "tables" in body:
-                            df = crawler.parse_tpex_json_to_dataframe(body, sym, trade_date)
-                            if df is not None and not df.empty:
-                                collected_dfs.append(df)
-                                # 即時儲存單檔暫存 (防 Pipe 爆裂與資料遺失)
-                                sym_pq = os.path.join(save_dir, f"{sym}.parquet")
-                                df.to_parquet(sym_pq, index=False)
-                                print(f"[{ts_res}]   [Worker-{worker_id} {idx}/{worker_total}] [OK] {sym} ({len(df)} 筆全量)")
-                            else:
-                                print(f"[{ts_res}]   [Worker-{worker_id} {idx}/{worker_total}] [無成交/略過] {sym}")
+                        for _ in range(30):  # 輪詢等待 CSV 下載落盤
+                            time.sleep(0.25)
+                            if glob.glob(os.path.join(save_dir, "*.crdownload")):
+                                continue
+                            candidates = [f for f in glob.glob(os.path.join(save_dir, "*.csv")) if os.path.getsize(f) > 30]
+                            if candidates:
+                                found_csv = candidates[0]
+                                break
+
+                    ts_res = datetime.now().strftime("%H:%M:%S")
+                    if found_csv and os.path.exists(found_csv):
+                        df = crawler.parse_tpex_csv_to_dataframe(found_csv, sym, trade_date)
+                        if df is not None and not df.empty:
+                            collected_dfs.append(df)
+                            # 即時實體落盤 Parquet (100% 杜絕進程間 Queue 管道容量爆裂)
+                            sym_pq = os.path.join(save_dir, f"{sym}.parquet")
+                            df.to_parquet(sym_pq, index=False)
+                            print(f"[{ts_res}]   [Worker-{worker_id} {idx}/{worker_total}] [OK] {sym} ({len(df)} 筆全量)")
                             success_crawl = True
+                            try: os.remove(found_csv)
+                            except OSError: pass
                             break
-                        elif str(body.get("status")) == "520" or "520" in str(body.get("title", "")):
-                            time.sleep(2.0 + attempt * 1.5)
-                            continue
-                        elif "stat" in body and ("查無" in body["stat"] or "無交易" in body["stat"]):
-                            print(f"[{ts_res}]   [Worker-{worker_id} {idx}/{worker_total}] [無成交/略過] {sym}")
-                            success_crawl = True
-                            break
+                        try: os.remove(found_csv)
+                        except OSError: pass
 
                     if attempt < 3:
                         time.sleep(1.0)
