@@ -354,6 +354,49 @@ def run_crawler_menu():
                 subprocess.run([sys.executable, "stock_crawler_coordinator.py", "--date", date_str, "--market", "all", "--workers", str(workers)])
 
 
+def clear_cache_menu():
+    """清空快取與暫存管理選單"""
+    print("\n🧹 快取與暫存管理：")
+    checkpoint_dir = os.path.join(os.path.dirname(__file__), "downloads_tpex_local", "checkpoints")
+    download_dir = os.path.join(os.path.dirname(__file__), "downloads_tpex_local")
+
+    # 檢查當前快取狀態
+    cp_files = glob.glob(os.path.join(checkpoint_dir, "*.parquet"))
+    total_cp_size = sum(os.path.getsize(f) for f in cp_files) if cp_files else 0
+
+    print("-" * 65)
+    print(f"  📦 斷點續傳快取 (Checkpoints): {len(cp_files)} 個檔案 ({total_cp_size / 1024:.1f} KB)")
+    for f in cp_files:
+        print(f"     - {os.path.basename(f)} ({os.path.getsize(f) / 1024:.1f} KB)")
+    print("-" * 65)
+
+    print("\n請選擇操作：")
+    print("  1. 清空斷點續傳快取 (Checkpoints) ➔ 下次執行將從第 1 檔全部重抓")
+    print("  2. 清空下載暫存並強制重置 Chrome 殭屍進程")
+    print("  3. 🚀 全部一鍵大掃除 (清空快取 + 暫存 + 終止 Chrome 殭屍)")
+    print("  0. 返回主選單")
+
+    c = input("\n請輸入選項 (0-3) > ").strip()
+    if c == "1":
+        if os.path.exists(checkpoint_dir):
+            shutil.rmtree(checkpoint_dir, ignore_errors=True)
+            os.makedirs(checkpoint_dir, exist_ok=True)
+        print("\n[✓] 斷點續傳快取已成功清空！下次執行將從第 1 檔全新採集。")
+    elif c == "2":
+        if os.name == "nt":
+            subprocess.run(["powershell", "-Command", "Stop-Process -Name chrome -Force -ErrorAction SilentlyContinue"], capture_output=True)
+        for w_dir in glob.glob(os.path.join(download_dir, "worker_dl_*")):
+            shutil.rmtree(w_dir, ignore_errors=True)
+        print("\n[✓] 下載暫存已清空，Chrome 殘留進程已全數終止重置！")
+    elif c == "3":
+        if os.path.exists(download_dir):
+            shutil.rmtree(download_dir, ignore_errors=True)
+            os.makedirs(checkpoint_dir, exist_ok=True)
+        if os.name == "nt":
+            subprocess.run(["powershell", "-Command", "Stop-Process -Name chrome -Force -ErrorAction SilentlyContinue"], capture_output=True)
+        print("\n[✓] 系統大掃除完成！快取、下載暫存已徹底清空，Chrome 狀態已完全還原。")
+
+
 def main():
     while True:
         print_banner()
@@ -363,10 +406,11 @@ def main():
         print("  1. 互動式設定參數 (Google Drive / Telegram / Email ➔ 生成 .env)")
         print("  2. 執行連線與功能測試 (Google Drive / Telegram / 股票採集)")
         print("  3. 啟動台股分點爬蟲任務")
-        print("  4. 重新檢查環境狀態")
+        print("  4. 🧹 清空快取與暫存管理 (Checkpoints / Chrome 釋放)")
+        print("  5. 重新檢查環境狀態")
         print("  0. 離開程式")
 
-        choice = input("\n請選擇功能 (0-4) > ").strip()
+        choice = input("\n請選擇功能 (0-5) > ").strip()
 
         if choice == "1":
             interactive_setup_env()
@@ -378,6 +422,9 @@ def main():
             run_crawler_menu()
             input("\n按 Enter 鍵返回主選單...")
         elif choice == "4":
+            clear_cache_menu()
+            input("\n按 Enter 鍵返回主選單...")
+        elif choice == "5":
             clear_screen()
             continue
         elif choice == "0":
@@ -390,3 +437,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
