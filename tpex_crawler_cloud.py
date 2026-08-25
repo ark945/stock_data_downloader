@@ -361,9 +361,9 @@ class TPEXCloudCrawler:
                     except Exception:
                         pass
 
-                    # 3. 清空監聽佇列並點擊查詢按鈕
+                    # 3. 清空監聽佇列並點擊查詢按鈕 (精準鎖定 formblock 內部)
                     page.listen.clear()
-                    q_btn = page.ele('xpath://form//button[@type="submit"]') or page.ele("css:form.formblock button[type=submit]") or page.ele("text:查詢")
+                    q_btn = page.ele("xpath://div[contains(@class,'formblock')]//button[contains(text(),'查詢')]") or page.ele("css:div.formblock button[type=submit]") or page.ele("css:form.formblock button[type=submit]")
                     if q_btn:
                         try: q_btn.click(by_js=True)
                         except:

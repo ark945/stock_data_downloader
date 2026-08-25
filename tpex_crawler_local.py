@@ -123,8 +123,8 @@ def _mp_local_worker_task(
                     except Exception:
                         pass
 
-                    # 3. 點擊查詢按鈕
-                    q_btn = page.ele('xpath://form//button[@type="submit"]') or page.ele("css:form.formblock button[type=submit]") or page.ele("text:查詢")
+                    # 3. 點擊查詢按鈕 (精準鎖定 formblock 內部，絕不點到頂部全站搜尋)
+                    q_btn = page.ele("xpath://div[contains(@class,'formblock')]//button[contains(text(),'查詢')]") or page.ele("css:div.formblock button[type=submit]") or page.ele("css:form.formblock button[type=submit]")
                     if q_btn:
                         try: q_btn.click(by_js=True)
                         except Exception:
