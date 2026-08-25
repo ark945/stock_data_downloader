@@ -42,10 +42,12 @@ class TeeLogger:
     def write(self, message):
         try:
             self.terminal.write(message)
+            self.terminal.flush()
         except Exception:
             pass
         try:
             self.log_file.write(message)
+            self.log_file.flush()
         except Exception:
             pass
 
