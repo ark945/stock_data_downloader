@@ -208,14 +208,17 @@ class TPEXLocalCrawler:
 
     @staticmethod
     def get_all_tpex_symbols() -> List[str]:
-        """取得上櫃股票與 ETF 清單 (4 碼個股優先排序)"""
+        """取得上櫃股票與 ETF 清單 (4 碼個股優先排序，含多重備援與本地持久化)"""
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         }
         raw_symbols = []
+        cache_path = os.path.join(os.path.dirname(__file__), "tpex_all_symbols.json")
+
+        # 端點 1: TPEX OpenAPI
         try:
             url = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes"
-            r = requests.get(url, headers=headers, timeout=10)
+            r = requests.get(url, headers=headers, timeout=12)
             if r.status_code == 200:
                 for item in r.json():
                     code = str(item.get("SecuritiesCompanyCode", "")).strip()
@@ -224,16 +227,33 @@ class TPEXLocalCrawler:
         except Exception:
             pass
 
-        if not raw_symbols:
+        # 端點 2: TPEX stk_wn1430
+        if len(raw_symbols) < 500:
             try:
                 url = "https://www.tpex.org.tw/web/stock/aftertrading/otc_quotes_no1430/stk_wn1430_result.php?l=zh-tw&o=json"
-                r = requests.get(url, headers=headers, timeout=10)
+                r = requests.get(url, headers=headers, timeout=12)
                 if r.status_code == 200:
                     for row in r.json().get("aaData", []):
                         if len(row) > 0:
                             code = str(row[0]).strip()
                             if re.match(r"^[0-9]{4}[A-Za-z]?$", code) or re.match(r"^00[0-9]{3}[A-Za-z0-9]?$", code):
                                 raw_symbols.append(code)
+            except Exception:
+                pass
+
+        # 端點 3: 本地持久化快取
+        if len(raw_symbols) > 500:
+            try:
+                with open(cache_path, "w", encoding="utf-8") as f:
+                    import json
+                    json.dump(raw_symbols, f)
+            except Exception:
+                pass
+        elif os.path.exists(cache_path):
+            try:
+                with open(cache_path, "r", encoding="utf-8") as f:
+                    import json
+                    raw_symbols = json.load(f)
             except Exception:
                 pass
 
