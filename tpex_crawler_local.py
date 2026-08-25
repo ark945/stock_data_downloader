@@ -84,84 +84,84 @@ def _mp_local_worker_task(
             pass
 
         for idx, sym in enumerate(symbols, 1):
-            try:
-                # 1. 清理舊 CSV
-                for old_f in glob.glob(os.path.join(save_dir, "*")):
-                    try: os.remove(old_f)
-                    except OSError: pass
-
-                # 2. 確保在 BrokerBS 頁面
-                cur_url = page.url or ""
-                cur_title = page.title or ""
-                if "brokerBS.html" not in cur_url or "520" in cur_title or "Error" in cur_title or "unknown error" in cur_title:
-                    page.get(tpex_url, retry=3, timeout=25)
-                    time.sleep(3.0)
-                    try: page.run_js("if (typeof turnstile !== 'undefined') { turnstile.execute(); }")
-                    except Exception: pass
-
-                stk_input = page.ele("css:input.code", timeout=4) or page.ele("@name=code", timeout=4)
-                if not stk_input:
-                    page.get(tpex_url, retry=2, timeout=20)
-                    time.sleep(2.5)
-                    try: page.run_js("if (typeof turnstile !== 'undefined') { turnstile.execute(); }")
-                    except Exception: pass
-                    stk_input = page.ele("css:input.code", timeout=5) or page.ele("@name=code", timeout=5)
-                    if not stk_input:
-                        failed_symbols.append(sym)
-                        continue
-
-                stk_input.input(sym, clear=True, by_js=True)
-                time.sleep(0.2)
-
-                # 3. 點擊日報表 [查詢] 按鈕並激活 Turnstile Token
-                q_btn = page.ele("xpath://div[contains(@class,'formblock')]//button[contains(text(),'查詢')]") or page.ele("css:form.formblock button[type=submit]") or page.ele("text:查詢")
-                if q_btn:
-                    try: q_btn.click(by_js=True)
-                    except Exception:
-                        try: q_btn.click()
-                        except Exception: pass
-
-                # 激活並等待 Turnstile 注入合法 Token 到隱藏表單
+            # 單檔標的閉環採集 (含最多 3 次原地重試 + DOM 備援，絕不放任通過)
+            success_crawl = False
+            for attempt in range(1, 4):
                 try:
-                    page.run_js("if (typeof turnstile !== 'undefined') { turnstile.execute(); }")
-                    for _ in range(12):
-                        time.sleep(0.1)
-                        tok = page.run_js("return document.querySelector('[name=cf-turnstile-response]') ? document.querySelector('[name=cf-turnstile-response]').value : '';")
-                        if tok and len(tok) > 10:
-                            break
-                except Exception:
-                    pass
+                    # 1. 清理舊 CSV
+                    for old_f in glob.glob(os.path.join(save_dir, "*")):
+                        try: os.remove(old_f)
+                        except OSError: pass
 
-                time.sleep(0.4)
-
-                # 檢查是否有無成交訊息
-                has_no_data = bool(page.ele("text:查無符合條件之資料", timeout=0.5) or page.ele("text:查無資料", timeout=0.5))
-                has_table_rows = bool(page.ele("css:table tbody tr", timeout=0.5))
-
-                if has_no_data or (not has_table_rows and not page.ele("xpath://button[contains(text(),'UTF-8')]", timeout=0.5)):
-                    ts_res = datetime.now().strftime("%H:%M:%S")
-                    print(f"[{ts_res}]   [Worker-{worker_id} {idx}/{worker_total}] [無成交/略過] {sym}")
-                    sys.stdout.flush()
-                    continue
-
-                # 4. 點擊 [下載 CSV (UTF-8)] 按鈕 (全量數據)
-                d_btn = page.ele("xpath://button[contains(text(),'UTF-8')]") or page.ele("text:下載 CSV (UTF-8)") or page.ele("text:下載 CSV")
-                if d_btn:
-                    try:
-                        d_btn.click(by_js=True)
-                    except Exception:
-                        try: d_btn.click()
+                    # 2. 確保在 BrokerBS 頁面
+                    cur_url = page.url or ""
+                    cur_title = page.title or ""
+                    if "brokerBS.html" not in cur_url or "520" in cur_title or "Error" in cur_title or "unknown error" in cur_title:
+                        page.get(tpex_url, retry=3, timeout=25)
+                        time.sleep(2.0)
+                        try: page.run_js("if (typeof turnstile !== 'undefined') { turnstile.execute(); }")
                         except Exception: pass
 
-                    found_csv = None
-                    for _ in range(25):  # 輪詢等待 CSV 下載落盤
-                        time.sleep(0.3)
-                        if glob.glob(os.path.join(save_dir, "*.crdownload")):
+                    stk_input = page.ele("css:input.code", timeout=4) or page.ele("@name=code", timeout=4)
+                    if not stk_input:
+                        page.get(tpex_url, retry=2, timeout=20)
+                        time.sleep(2.0)
+                        try: page.run_js("if (typeof turnstile !== 'undefined') { turnstile.execute(); }")
+                        except Exception: pass
+                        stk_input = page.ele("css:input.code", timeout=5) or page.ele("@name=code", timeout=5)
+                        if not stk_input:
                             continue
-                        candidates = [f for f in glob.glob(os.path.join(save_dir, "*.csv")) if os.path.getsize(f) > 30]
-                        if candidates:
-                            found_csv = candidates[0]
-                            break
+
+                    stk_input.input(sym, clear=True, by_js=True)
+                    time.sleep(0.15)
+
+                    # 3. 點擊日報表 [查詢] 按鈕並激活 Turnstile Token
+                    q_btn = page.ele("xpath://div[contains(@class,'formblock')]//button[contains(text(),'查詢')]") or page.ele("css:form.formblock button[type=submit]") or page.ele("text:查詢")
+                    if q_btn:
+                        try: q_btn.click(by_js=True)
+                        except Exception:
+                            try: q_btn.click()
+                            except Exception: pass
+
+                    # 激活並等待 Turnstile 注入合法 Token 到隱藏表單
+                    try:
+                        page.run_js("if (typeof turnstile !== 'undefined') { turnstile.execute(); }")
+                        for _ in range(15):
+                            time.sleep(0.1)
+                            tok = page.run_js("return document.querySelector('[name=cf-turnstile-response]') ? document.querySelector('[name=cf-turnstile-response]').value : '';")
+                            if tok and len(tok) > 10:
+                                break
+                    except Exception:
+                        pass
+
+                    time.sleep(0.4)
+
+                    # 檢查是否有無成交訊息
+                    no_data_msg = bool(page.ele("text:查無符合條件之資料", timeout=0.3) or page.ele("text:查無資料", timeout=0.3))
+                    if no_data_msg:
+                        ts_res = datetime.now().strftime("%H:%M:%S")
+                        print(f"[{ts_res}]   [Worker-{worker_id} {idx}/{worker_total}] [無成交/略過] {sym}")
+                        success_crawl = True
+                        break
+
+                    # 4. 點擊 [下載 CSV (UTF-8)] 按鈕 (全量數據)
+                    d_btn = page.ele("xpath://button[contains(text(),'UTF-8')]") or page.ele("text:下載 CSV (UTF-8)") or page.ele("text:下載 CSV")
+                    found_csv = None
+                    if d_btn:
+                        try:
+                            d_btn.click(by_js=True)
+                        except Exception:
+                            try: d_btn.click()
+                            except Exception: pass
+
+                        for _ in range(25):  # 輪詢等待 CSV 下載落盤
+                            time.sleep(0.3)
+                            if glob.glob(os.path.join(save_dir, "*.crdownload")):
+                                continue
+                            candidates = [f for f in glob.glob(os.path.join(save_dir, "*.csv")) if os.path.getsize(f) > 30]
+                            if candidates:
+                                found_csv = candidates[0]
+                                break
 
                     ts_res = datetime.now().strftime("%H:%M:%S")
                     if found_csv and os.path.exists(found_csv):
@@ -169,28 +169,21 @@ def _mp_local_worker_task(
                         if df is not None and not df.empty:
                             collected_dfs.append(df)
                             print(f"[{ts_res}]   [Worker-{worker_id} {idx}/{worker_total}] [OK] {sym} ({len(df)} 筆全量)")
-                        else:
-                            print(f"[{ts_res}]   [Worker-{worker_id} {idx}/{worker_total}] [無成交明細/略過] {sym}")
-                        try: os.remove(found_csv)
-                        except OSError: pass
-                    else:
-                        # 檢查頁面是否明確提示查無資料
-                        no_data_msg = bool(page.ele("text:查無符合條件之資料", timeout=0.3) or page.ele("text:查無資料", timeout=0.3))
-                        if no_data_msg:
-                            print(f"[{ts_res}]   [Worker-{worker_id} {idx}/{worker_total}] [無成交/略過] {sym}")
-                        else:
-                            failed_symbols.append(sym)
-                            print(f"[{ts_res}]   [Worker-{worker_id} {idx}/{worker_total}] [下載超時] {sym}")
-                else:
-                    ts_btn = datetime.now().strftime("%H:%M:%S")
-                    print(f"[{ts_btn}]   [Worker-{worker_id} {idx}/{worker_total}] [查無資料/無按鈕] {sym}")
+                            success_crawl = True
+                            try: os.remove(found_csv)
+                            except OSError: pass
+                            break
+                    if attempt < 3:
+                        time.sleep(1.0)
 
-                time.sleep(0.4)
+                except Exception as e:
+                    if attempt < 3:
+                        time.sleep(1.0)
 
-            except Exception as e:
-                ts_err = datetime.now().strftime("%H:%M:%S")
+            if not success_crawl:
+                ts_res = datetime.now().strftime("%H:%M:%S")
                 failed_symbols.append(sym)
-                print(f"[{ts_err}]   [Worker-{worker_id} {idx}/{worker_total}] [異常] {sym} ({e})")
+                print(f"[{ts_res}]   [Worker-{worker_id} {idx}/{worker_total}] [下載失敗/已記錄待補抓] {sym}")
 
             sys.stdout.flush()
 
