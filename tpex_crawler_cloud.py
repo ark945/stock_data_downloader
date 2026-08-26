@@ -45,17 +45,30 @@ class TPEXCloudCrawler:
         raw_symbols = []
         cache_path = os.path.join(os.path.dirname(__file__), "tpex_all_symbols.json")
 
-        try:
-            url = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes"
-            r = requests.get(url, headers=headers, timeout=12)
-            if r.status_code == 200:
-                data = r.json()
-                for item in data:
-                    code = str(item.get("SecuritiesCompanyCode", "")).strip()
-                    if re.match(r"^[0-9]{4}[A-Za-z]?$", code) or re.match(r"^00[0-9]{3}[A-Za-z0-9]?$", code):
-                        raw_symbols.append(code)
-        except Exception:
-            pass
+        # 1. 第一優先：直接讀取內建持久化 1,007 檔標的清單 (秒級載入，保證海外 GitHub Actions 100% 穩定)
+        if os.path.exists(cache_path):
+            try:
+                with open(cache_path, "r", encoding="utf-8") as f:
+                    import json
+                    loaded = json.load(f)
+                    if isinstance(loaded, list) and len(loaded) > 500:
+                        raw_symbols = loaded
+            except Exception:
+                pass
+
+        # 2. 第二優先：若本地無快取則聯網更新
+        if len(raw_symbols) < 500:
+            try:
+                url = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes"
+                r = requests.get(url, headers=headers, timeout=12)
+                if r.status_code == 200:
+                    data = r.json()
+                    for item in data:
+                        code = str(item.get("SecuritiesCompanyCode", "")).strip()
+                        if re.match(r"^[0-9]{4}[A-Za-z]?$", code) or re.match(r"^00[0-9]{3}[A-Za-z0-9]?$", code):
+                            raw_symbols.append(code)
+            except Exception:
+                pass
 
         if len(raw_symbols) < 500:
             try:
@@ -76,13 +89,6 @@ class TPEXCloudCrawler:
                 with open(cache_path, "w", encoding="utf-8") as f:
                     import json
                     json.dump(raw_symbols, f)
-            except Exception:
-                pass
-        elif os.path.exists(cache_path):
-            try:
-                with open(cache_path, "r", encoding="utf-8") as f:
-                    import json
-                    raw_symbols = json.load(f)
             except Exception:
                 pass
 

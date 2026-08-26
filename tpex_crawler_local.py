@@ -240,19 +240,31 @@ class TPEXLocalCrawler:
         raw_symbols = []
         cache_path = os.path.join(os.path.dirname(__file__), "tpex_all_symbols.json")
 
-        # 端點 1: TPEX OpenAPI
-        try:
-            url = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes"
-            r = requests.get(url, headers=headers, timeout=12)
-            if r.status_code == 200:
-                for item in r.json():
-                    code = str(item.get("SecuritiesCompanyCode", "")).strip()
-                    if re.match(r"^[0-9]{4}[A-Za-z]?$", code) or re.match(r"^00[0-9]{3}[A-Za-z0-9]?$", code):
-                        raw_symbols.append(code)
-        except Exception:
-            pass
+        # 1. 第一優先：直接讀取內建持久化 1,007 檔標的清單 (秒級載入，100% 穩定)
+        if os.path.exists(cache_path):
+            try:
+                with open(cache_path, "r", encoding="utf-8") as f:
+                    import json
+                    loaded = json.load(f)
+                    if isinstance(loaded, list) and len(loaded) > 500:
+                        raw_symbols = loaded
+            except Exception:
+                pass
 
-        # 端點 2: TPEX stk_wn1430
+        # 2. 第二優先：若本地無快取則聯網更新
+        if len(raw_symbols) < 500:
+            try:
+                url = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes"
+                r = requests.get(url, headers=headers, timeout=12)
+                if r.status_code == 200:
+                    data = r.json()
+                    for item in data:
+                        code = str(item.get("SecuritiesCompanyCode", "")).strip()
+                        if re.match(r"^[0-9]{4}[A-Za-z]?$", code) or re.match(r"^00[0-9]{3}[A-Za-z0-9]?$", code):
+                            raw_symbols.append(code)
+            except Exception:
+                pass
+
         if len(raw_symbols) < 500:
             try:
                 url = "https://www.tpex.org.tw/web/stock/aftertrading/otc_quotes_no1430/stk_wn1430_result.php?l=zh-tw&o=json"
