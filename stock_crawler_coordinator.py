@@ -265,7 +265,7 @@ def run_full_market_crawler(
     print("==================================================")
     log_msg("[OK] 本節點爬蟲任務執行完畢！")
     log_msg(f"[*] 啟動時間: {start_str}")
-    zero_trade_count = max(0, total_target_count - unique_symbols)
+    zero_trade_count = max(0, total_target_count - unique_symbols - len(all_failed_items))
     log_msg(f"[+] 全市場掃描: 100% 完成 (共 {total_target_count} 檔 | 有效成交產出: {unique_symbols} 檔 | 無成交/略過: {zero_trade_count} 檔)")
 
     # 4. 發送通知 (若為雲端分片模式則由最後聚合步驟統一推播，避免分片節點日誌混淆)
@@ -281,11 +281,12 @@ def run_full_market_crawler(
         trade_date=trade_date,
         total_target=total_target_count,
         success_count=unique_symbols,
-        no_trade_count=0,
+        no_trade_count=zero_trade_count,
         failed_stocks=all_failed_items,
         total_rows=total_rows,
         elapsed_seconds=elapsed_total,
         rounds_executed=rounds_executed,
+        market=markets,
         start_time_str=start_str,
         end_time_str=end_str,
         duration_str=duration_str
@@ -296,11 +297,12 @@ def run_full_market_crawler(
         trade_date=trade_date,
         total_target=total_target_count,
         success_count=unique_symbols,
-        no_trade_count=0,
+        no_trade_count=zero_trade_count,
         failed_stocks=all_failed_items,
         total_rows=total_rows,
         elapsed_seconds=elapsed_total,
         rounds_executed=rounds_executed,
+        market=markets,
         receiver_email=receiver_email,
         start_time_str=start_str,
         end_time_str=end_str,

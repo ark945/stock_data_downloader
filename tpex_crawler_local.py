@@ -74,50 +74,32 @@ def _mp_local_worker_task(
         page.get(tpex_url, retry=3, timeout=30)
         time.sleep(2.5)
 
+        processed_symbols = set()
+
         for idx, sym in enumerate(symbols, 1):
             success_crawl = False
-            for attempt in range(1, 4):
-                try:
-                    # 1. 確保在 BrokerBS 頁面 (若斷線自動重啟 Chrome)
+            try:
+                for attempt in range(1, 4):
                     try:
-                        cur_url = page.url or ""
-                        cur_title = page.title or ""
-                    except Exception:
-                        try: page.quit()
-                        except Exception: pass
-                        page = ChromiumPage(co)
-                        page.listen.start(["afterTrading", "brokerBS"])
-                        page.get(tpex_url, retry=3, timeout=30)
-                        time.sleep(2.5)
-                        cur_url = page.url or ""
-                        cur_title = page.title or ""
+                        # 1. 確保在 BrokerBS 頁面 (若斷線自動重啟 Chrome)
+                        try:
+                            cur_url = page.url or ""
+                            cur_title = page.title or ""
+                        except Exception:
+                            try: page.quit()
+                            except Exception: pass
+                            page = ChromiumPage(co)
+                            page.listen.start(["afterTrading", "brokerBS"])
+                            page.get(tpex_url, retry=3, timeout=30)
+                            time.sleep(2.5)
+                            cur_url = page.url or ""
+                            cur_title = page.title or ""
 
-                    # 1. 確保在目標頁面並輸入代碼
-                    if "brokerBS.html" not in (page.url or "") or "search.html" in (page.url or ""):
-                        page.get(tpex_url, retry=2, timeout=20)
-                        time.sleep(1.2)
+                        # 1. 確保在目標頁面並輸入代碼
+                        if "brokerBS.html" not in (page.url or "") or "search.html" in (page.url or ""):
+                            page.get(tpex_url, retry=2, timeout=20)
+                            time.sleep(1.2)
 
-                    page.run_js(f"""
-                        const inp = document.querySelector('input.code') || document.querySelector('[name=code]');
-                        if (inp) {{
-                            inp.value = '{sym}';
-                            inp.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                            inp.dispatchEvent(new Event('change', {{ bubbles: true }}));
-                        }}
-                    """)
-
-                    # 2. 換發全新 Turnstile Token (若未就緒則快速刷新確保)
-                    token_ready = False
-                    for _ in range(20):
-                        time.sleep(0.08)
-                        tok = page.run_js("return document.querySelector('[name=cf-turnstile-response]') ? document.querySelector('[name=cf-turnstile-response]').value : '';")
-                        if tok and len(tok) > 20:
-                            token_ready = True
-                            break
-
-                    if not token_ready:
-                        page.get(tpex_url, retry=2, timeout=20)
-                        time.sleep(1.2)
                         page.run_js(f"""
                             const inp = document.querySelector('input.code') || document.querySelector('[name=code]');
                             if (inp) {{
@@ -126,92 +108,117 @@ def _mp_local_worker_task(
                                 inp.dispatchEvent(new Event('change', {{ bubbles: true }}));
                             }}
                         """)
-                        for _ in range(30):
+
+                        # 2. 換發全新 Turnstile Token (若未就緒則快速刷新確保)
+                        token_ready = False
+                        for _ in range(20):
                             time.sleep(0.08)
                             tok = page.run_js("return document.querySelector('[name=cf-turnstile-response]') ? document.querySelector('[name=cf-turnstile-response]').value : '';")
                             if tok and len(tok) > 20:
                                 token_ready = True
                                 break
 
-                    # 3. 清空監聽佇列並點擊查詢按鈕 (100% 精準觸發 formblock 內部)
-                    page.listen.clear()
-                    page.run_js("""
-                        const btn = document.querySelector('div.formblock button[type="submit"]') || 
-                                    document.querySelector('form.formblock button[type="submit"]') ||
-                                    Array.from(document.querySelectorAll('div.formblock button, form.formblock button')).find(b => (b.innerText||'').includes('查詢'));
-                        if (btn) btn.click();
-                    """)
-
-                    pkt = page.listen.wait(timeout=6)
-                    ts_res = datetime.now().strftime("%H:%M:%S")
-
-                    if not pkt:
-                        if attempt < 3:
-                            time.sleep(0.8)
-                        continue
-
-                    body = None
-                    try:
-                        raw = pkt.response.body
-                        if isinstance(raw, (bytes, bytearray)):
-                            raw = raw.decode("utf-8", errors="replace")
-                        if isinstance(raw, str):
-                            raw = raw.strip()
-                            if raw.startswith("{") and raw.endswith("}"):
-                                body = json.loads(raw)
-                        elif isinstance(raw, dict):
-                            body = raw
-                    except Exception:
-                        body = None
-
-                    if isinstance(body, dict):
-                        if "tables" in body:
-                            df = crawler.parse_tpex_json_to_dataframe(body, sym, trade_date)
-                            if df is not None and not df.empty:
-                                collected_dfs.append(df)
-                                # 即時實體落盤 Parquet (100% 杜絕進程間通訊管道阻塞)
-                                sym_pq = os.path.join(save_dir, f"{sym}.parquet")
-                                df.to_parquet(sym_pq, index=False)
-                                print(f"[{ts_res}]   [Worker-{worker_id} {idx}/{worker_total}] [OK] {sym} ({len(df)} 筆全量)")
-                            else:
-                                print(f"[{ts_res}]   [Worker-{worker_id} {idx}/{worker_total}] [無成交/略過] {sym}")
-                            success_crawl = True
-                            break
-                        elif str(body.get("status")) == "520" or "520" in str(body.get("title", "")):
-                            time.sleep(2.0 + attempt * 1.5)
-                            continue
-                        elif "stat" in body and ("查無" in body["stat"] or "無交易" in body["stat"] or "無符合" in body["stat"]):
-                            print(f"[{ts_res}]   [Worker-{worker_id} {idx}/{worker_total}] [無成交/略過] {sym}")
-                            success_crawl = True
-                            break
-                        else:
-                            stat_msg = body.get("stat") or body.get("message") or str(body)[:50]
-                            # 遭遇非預期回應時刷新頁面重建連線
+                        if not token_ready:
                             page.get(tpex_url, retry=2, timeout=20)
-                            time.sleep(2.0)
+                            time.sleep(1.2)
+                            page.run_js(f"""
+                                const inp = document.querySelector('input.code') || document.querySelector('[name=code]');
+                                if (inp) {{
+                                    inp.value = '{sym}';
+                                    inp.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                                    inp.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                                }}
+                            """)
+                            for _ in range(30):
+                                time.sleep(0.08)
+                                tok = page.run_js("return document.querySelector('[name=cf-turnstile-response]') ? document.querySelector('[name=cf-turnstile-response]').value : '';")
+                                if tok and len(tok) > 20:
+                                    token_ready = True
+                                    break
 
-                    if attempt < 3:
-                        time.sleep(1.2)
+                        # 3. 清空監聽佇列並點擊查詢按鈕 (100% 精準觸發 formblock 內部)
+                        page.listen.clear()
+                        page.run_js("""
+                            const btn = document.querySelector('div.formblock button[type="submit"]') || 
+                                        document.querySelector('form.formblock button[type="submit"]') ||
+                                        Array.from(document.querySelectorAll('div.formblock button, form.formblock button')).find(b => (b.innerText||'').includes('查詢'));
+                            if (btn) btn.click();
+                        """)
 
-                except Exception as e:
-                    # 發生瀏覽器連線斷開時，自動重啟瀏覽器
-                    if "Disconnected" in str(type(e)) or "Connection" in str(type(e)):
-                        try: page.quit()
-                        except Exception: pass
-                        page = ChromiumPage(co)
-                        page.listen.start(["afterTrading", "brokerBS"])
-                        page.get(tpex_url, retry=3, timeout=30)
-                        time.sleep(2.5)
+                        pkt = page.listen.wait(timeout=6)
+                        ts_res = datetime.now().strftime("%H:%M:%S")
 
-                    if attempt < 3:
-                        time.sleep(1.2)
+                        if not pkt:
+                            if attempt < 3:
+                                time.sleep(0.8)
+                            continue
 
-            if not success_crawl:
-                ts_res = datetime.now().strftime("%H:%M:%S")
+                        body = None
+                        try:
+                            raw = pkt.response.body
+                            if isinstance(raw, (bytes, bytearray)):
+                                raw = raw.decode("utf-8", errors="replace")
+                            if isinstance(raw, str):
+                                raw = raw.strip()
+                                if raw.startswith("{") and raw.endswith("}"):
+                                    body = json.loads(raw)
+                            elif isinstance(raw, dict):
+                                body = raw
+                        except Exception:
+                            body = None
+
+                        if isinstance(body, dict):
+                            if "tables" in body:
+                                df = crawler.parse_tpex_json_to_dataframe(body, sym, trade_date)
+                                if df is not None and not df.empty:
+                                    collected_dfs.append(df)
+                                    # 即時實體落盤 Parquet (100% 杜絕進程間通訊管道阻塞)
+                                    sym_pq = os.path.join(save_dir, f"{sym}.parquet")
+                                    df.to_parquet(sym_pq, index=False)
+                                    print(f"[{ts_res}]   [Worker-{worker_id} {idx}/{worker_total}] [OK] {sym} ({len(df)} 筆全量)")
+                                else:
+                                    print(f"[{ts_res}]   [Worker-{worker_id} {idx}/{worker_total}] [無成交/略過] {sym}")
+                                success_crawl = True
+                                break
+                            elif str(body.get("status")) == "520" or "520" in str(body.get("title", "")):
+                                time.sleep(2.0 + attempt * 1.5)
+                                continue
+                            elif "stat" in body and ("查無" in body["stat"] or "無交易" in body["stat"] or "無符合" in body["stat"]):
+                                print(f"[{ts_res}]   [Worker-{worker_id} {idx}/{worker_total}] [無成交/略過] {sym}")
+                                success_crawl = True
+                                break
+                            else:
+                                stat_msg = body.get("stat") or body.get("message") or str(body)[:50]
+                                # 遭遇非預期回應時刷新頁面重建連線
+                                page.get(tpex_url, retry=2, timeout=20)
+                                time.sleep(2.0)
+
+                        if attempt < 3:
+                            time.sleep(1.2)
+
+                    except Exception as e:
+                        # 發生瀏覽器連線斷開時，自動重啟瀏覽器
+                        if "Disconnected" in str(type(e)) or "Connection" in str(type(e)):
+                            try: page.quit()
+                            except Exception: pass
+                            page = ChromiumPage(co)
+                            page.listen.start(["afterTrading", "brokerBS"])
+                            page.get(tpex_url, retry=3, timeout=30)
+                            time.sleep(2.5)
+
+                        if attempt < 3:
+                            time.sleep(1.2)
+
+                processed_symbols.add(sym)
+                if not success_crawl:
+                    ts_res = datetime.now().strftime("%H:%M:%S")
+                    failed_symbols.append(sym)
+                    print(f"[{ts_res}]   [Worker-{worker_id} {idx}/{worker_total}] [採集失敗/已記錄待補抓] {sym}")
+
+            except Exception as single_e:
+                processed_symbols.add(sym)
                 failed_symbols.append(sym)
-                print(f"[{ts_res}]   [Worker-{worker_id} {idx}/{worker_total}] [採集失敗/已記錄待補抓] {sym}")
-
-            sys.stdout.flush()
+                print(f"[!] Worker-{worker_id} 處理標的 {sym} 遭遇單檔例外: {single_e}")
 
             sys.stdout.flush()
 
@@ -220,6 +227,11 @@ def _mp_local_worker_task(
         print(f"[!] TPEX 本地 Worker-{worker_id} 引擎異常: {e}")
         traceback.print_exc()
     finally:
+        # 兜底保護：若 Worker 異常提前退出，確保所有剩餘未跑的標的 100% 進入補抓清單
+        unprocessed = [s for s in symbols if s not in processed_symbols and s not in failed_symbols]
+        if unprocessed:
+            failed_symbols.extend(unprocessed)
+            print(f"[*] Worker-{worker_id} 兜底保護：已自動將 {len(unprocessed)} 檔剩餘未執行標的加入補抓清單。")
         if page:
             try: page.quit()
             except Exception: pass

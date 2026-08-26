@@ -330,6 +330,7 @@ class TPEXCloudCrawler:
         page = None
         temp_user_data = None
 
+        processed_symbols = set()
         try:
             print(f"[*] 正在啟動 TPEX 雲端單一持久化引擎 (CDP 封包監聽模式，待抓取: {total} 檔)...")
             page, temp_user_data = self._launch_browser_session(BASE_PORT)
@@ -449,12 +450,18 @@ class TPEXCloudCrawler:
                     ts_err = get_taipei_now().strftime("%H:%M:%S")
                     failed_symbols.append(sym)
                     print(f"[{ts_err}]   [上櫃 {idx}/{total}] [異常] {sym} ({e})")
+                finally:
+                    processed_symbols.add(sym)
 
                 sys.stdout.flush()
 
         except Exception as e:
             print(f"[!] TPEX 雲端引擎異常: {e}")
         finally:
+            unprocessed = [s for s in stock_codes if s not in processed_symbols and s not in failed_symbols]
+            if unprocessed:
+                failed_symbols.extend(unprocessed)
+                print(f"[*] TPEX 雲端兜底保護：已自動將 {len(unprocessed)} 檔剩餘未執行標的加入補抓清單。")
             if page:
                 try: page.quit()
                 except Exception: pass
