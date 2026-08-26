@@ -92,47 +92,62 @@ def _mp_local_worker_task(
                         cur_url = page.url or ""
                         cur_title = page.title or ""
 
-                    if "brokerBS.html" not in cur_url or "520" in cur_title or "Error" in cur_title or "unknown error" in cur_title or "search.html" in cur_url:
-                        page.get(tpex_url, retry=3, timeout=25)
-                        time.sleep(2.0)
-
-                    stk_input = page.ele("css:input.code", timeout=4) or page.ele("@name=code", timeout=4)
-                    if not stk_input:
+                    # 1. 確保在目標頁面並輸入代碼
+                    if "brokerBS.html" not in (page.url or "") or "search.html" in (page.url or ""):
                         page.get(tpex_url, retry=2, timeout=20)
-                        time.sleep(2.0)
-                        stk_input = page.ele("css:input.code", timeout=5) or page.ele("@name=code", timeout=5)
-                        if not stk_input:
-                            continue
+                        time.sleep(1.2)
 
-                    stk_input.input(sym, clear=True, by_js=True)
-                    time.sleep(0.1)
+                    page.run_js(f"""
+                        const inp = document.querySelector('input.code') || document.querySelector('[name=code]');
+                        if (inp) {{
+                            inp.value = '{sym}';
+                            inp.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                            inp.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                        }}
+                    """)
 
-                    # 2. 換發全新 Turnstile Token (給足充足窗口，一生成立即 break)
-                    try:
-                        page.run_js("if (typeof turnstile !== 'undefined') { try { turnstile.reset(); } catch(e){} try { turnstile.execute(); } catch(e){} }")
-                        for _ in range(25):
-                            time.sleep(0.1)
+                    # 2. 換發全新 Turnstile Token (若未就緒則快速刷新確保)
+                    token_ready = False
+                    for _ in range(20):
+                        time.sleep(0.08)
+                        tok = page.run_js("return document.querySelector('[name=cf-turnstile-response]') ? document.querySelector('[name=cf-turnstile-response]').value : '';")
+                        if tok and len(tok) > 20:
+                            token_ready = True
+                            break
+
+                    if not token_ready:
+                        page.get(tpex_url, retry=2, timeout=20)
+                        time.sleep(1.2)
+                        page.run_js(f"""
+                            const inp = document.querySelector('input.code') || document.querySelector('[name=code]');
+                            if (inp) {{
+                                inp.value = '{sym}';
+                                inp.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                                inp.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                            }}
+                        """)
+                        for _ in range(30):
+                            time.sleep(0.08)
                             tok = page.run_js("return document.querySelector('[name=cf-turnstile-response]') ? document.querySelector('[name=cf-turnstile-response]').value : '';")
                             if tok and len(tok) > 20:
+                                token_ready = True
                                 break
-                    except Exception:
-                        pass
 
-                    # 3. 清空監聽佇列並點擊查詢按鈕 (精準鎖定 formblock 內部)
+                    # 3. 清空監聽佇列並點擊查詢按鈕 (100% 精準觸發 formblock 內部)
                     page.listen.clear()
-                    q_btn = page.ele("xpath://div[contains(@class,'formblock')]//button[contains(text(),'查詢')]") or page.ele("css:div.formblock button[type=submit]") or page.ele("css:form.formblock button[type=submit]")
-                    if q_btn:
-                        try: q_btn.click(by_js=True)
-                        except Exception:
-                            try: q_btn.click()
-                            except Exception: pass
+                    page.run_js("""
+                        const btn = document.querySelector('div.formblock button[type="submit"]') || 
+                                    document.querySelector('form.formblock button[type="submit"]') ||
+                                    Array.from(document.querySelectorAll('div.formblock button, form.formblock button')).find(b => (b.innerText||'').includes('查詢'));
+                        if (btn) btn.click();
+                    """)
 
-                    pkt = page.listen.wait(timeout=12)
+                    pkt = page.listen.wait(timeout=6)
                     ts_res = datetime.now().strftime("%H:%M:%S")
 
                     if not pkt:
                         if attempt < 3:
-                            time.sleep(1.0)
+                            time.sleep(0.8)
                         continue
 
                     body = pkt.response.body
