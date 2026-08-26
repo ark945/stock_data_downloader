@@ -150,12 +150,19 @@ def _mp_local_worker_task(
                             time.sleep(0.8)
                         continue
 
-                    body = pkt.response.body
-                    if isinstance(body, str):
-                        try:
-                            body = json.loads(body)
-                        except json.JSONDecodeError:
-                            body = None
+                    body = None
+                    try:
+                        raw = pkt.response.body
+                        if isinstance(raw, (bytes, bytearray)):
+                            raw = raw.decode("utf-8", errors="replace")
+                        if isinstance(raw, str):
+                            raw = raw.strip()
+                            if raw.startswith("{") and raw.endswith("}"):
+                                body = json.loads(raw)
+                        elif isinstance(raw, dict):
+                            body = raw
+                    except Exception:
+                        body = None
 
                     if isinstance(body, dict):
                         if "tables" in body:

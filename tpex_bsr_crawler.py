@@ -61,7 +61,12 @@ class TPEXBrokerCrawler:
         """
         if is_running_in_ci():
             print("[*] [環境路由] 偵測到 ☁️ GitHub Actions 雲端環境 ➔ 自動啟用 TPEXCloudCrawler (雲端專用防禦引擎)")
-            return self.cloud_engine.crawl_stocks(stock_codes, trade_date)
+            return self.cloud_engine.crawl_stocks_with_retry(
+                stock_codes=stock_codes,
+                trade_date=trade_date,
+                max_rounds=max_rounds,
+                cooldown_sec=cooldown_sec
+            )
         else:
             print("[*] [環境路由] 偵測到 💻 Local 本地端環境 ➔ 自動啟用 TPEXLocalCrawler (本地專用多進程極速引擎)")
             return self.local_engine.crawl_stocks_with_retry(

@@ -401,12 +401,19 @@ class TPEXCloudCrawler:
                         print(f"[{ts_res}]   [上櫃 {idx}/{total}] [封包逾時] {sym}")
                         continue
 
-                    body = pkt.response.body
-                    if isinstance(body, str):
-                        try:
-                            body = json.loads(body)
-                        except json.JSONDecodeError:
-                            body = None
+                    body = None
+                    try:
+                        raw = pkt.response.body
+                        if isinstance(raw, (bytes, bytearray)):
+                            raw = raw.decode("utf-8", errors="replace")
+                        if isinstance(raw, str):
+                            raw = raw.strip()
+                            if raw.startswith("{") and raw.endswith("}"):
+                                body = json.loads(raw)
+                        elif isinstance(raw, dict):
+                            body = raw
+                    except Exception:
+                        body = None
 
                     if isinstance(body, dict):
                         if "tables" in body:
@@ -435,6 +442,8 @@ class TPEXCloudCrawler:
                     else:
                         failed_symbols.append(sym)
                         print(f"[{ts_res}]   [上櫃 {idx}/{total}] [解析失敗] {sym}")
+                        page.get(self.TPEX_URL, retry=2, timeout=20)
+                        time.sleep(1.5)
 
                 except Exception as e:
                     ts_err = get_taipei_now().strftime("%H:%M:%S")
@@ -453,3 +462,33 @@ class TPEXCloudCrawler:
                 shutil.rmtree(temp_user_data, ignore_errors=True)
 
         return collected_dfs, failed_symbols
+
+    def crawl_stocks_with_retry(
+        self,
+        stock_codes: List[str],
+        trade_date: str,
+        max_rounds: int = 2,
+        cooldown_sec: int = 10
+    ) -> Tuple[List[pd.DataFrame], List[str]]:
+        """雲端多輪自適應安全補抓機制 (針對 CF 520 / 逾時進行第 2 輪補抓)"""
+        all_dfs = []
+        pending_symbols = list(stock_codes)
+
+        for current_round in range(1, max_rounds + 1):
+            if not pending_symbols:
+                break
+
+            ts_now = get_taipei_now().strftime("%H:%M:%S")
+            print(f"[{ts_now}] >>> [雲端分片] TPEX 第 {current_round}/{max_rounds} 輪抓取啟動 (待抓: {len(pending_symbols)} 檔)...")
+            sys.stdout.flush()
+
+            round_dfs, round_failed = self.crawl_stocks(pending_symbols, trade_date)
+            all_dfs.extend(round_dfs)
+            pending_symbols = list(round_failed)
+
+            if pending_symbols and current_round < max_rounds:
+                print(f"[*] [雲端重跑] 第 {current_round} 輪未完成 {len(pending_symbols)} 檔，冷卻 {cooldown_sec} 秒後啟動第 {current_round + 1} 輪重跑補抓...")
+                sys.stdout.flush()
+                time.sleep(cooldown_sec)
+
+        return all_dfs, pending_symbols
