@@ -4,13 +4,15 @@ Google Drive 雲端同步模組 (Google Drive Sync Service)
 支援兩種認證上傳架構：
 1. 【推薦】Google Apps Script (GAS) Web App 模式 (環境變數 GDRIVE_UPLOAD_URL)
    - 直接使用個人 Google 帳戶身分寫入 My Drive，徹底解決 Service Account 0 Quota 配額限制問題。
+   - 具備 300 秒超時寬限與 3 次自動重試機制，完美支援 20MB+ 大型全市場 Parquet 資料庫。
 2. Google Cloud Service Account (服務帳戶) 模式 (環境變數 GDRIVE_SERVICE_ACCOUNT_KEY)
-   - 適用於 Google Workspace 共用雲端硬碟 (Shared Drives)。
+   - 適用於 Google Workspace 共用雲端硬碟 (Shared Drives)，具備 Resumable Upload 串流上傳。
 """
 
 import os
 import sys
 import json
+import time
 import base64
 from typing import Optional, Dict, Any
 
@@ -25,9 +27,16 @@ DEFAULT_GDRIVE_FOLDER_ID = ""
 SCOPES = ["https://www.googleapis.com/auth/drive"]
 
 
-def upload_via_gas(local_file_path: str, upload_url: str, folder_id: str, subfolder: Optional[str] = None) -> Optional[Dict[str, Any]]:
+def upload_via_gas(
+    local_file_path: str,
+    upload_url: str,
+    folder_id: str,
+    subfolder: Optional[str] = None,
+    max_retries: int = 3
+) -> Optional[Dict[str, Any]]:
     """
     透過 Google Apps Script Web App 上傳檔案 (支援個人 Google 帳戶 15GB 空間)
+    針對大型檔案 (如 20MB 全市場 Parquet) 提供 300s 超時寬限與 3 次自動重試機制
     """
     import requests
 
@@ -60,37 +69,71 @@ def upload_via_gas(local_file_path: str, upload_url: str, folder_id: str, subfol
             payload["subfolder"] = subfolder
 
         headers = {"Content-Type": "application/json"}
-        session = requests.Session()
-        resp = session.post(upload_url, json=payload, headers=headers, timeout=60, allow_redirects=True)
-        if resp.status_code == 200:
+
+        # 針對大檔案設定足夠超時時間 (300 秒 / 5分鐘)
+        # 19.8MB Base64 約 26.4MB，Google 處理約需 60~90 秒
+        timeout_seconds = 300 if file_size_mb > 5.0 else 120
+
+        for attempt in range(1, max_retries + 1):
             try:
-                res_data = resp.json()
-            except Exception:
-                # 兼容純文字或重定向返回
-                print(f"[!] GAS 返回非 JSON 格式內容: {resp.text[:200]}")
-                return None
-            if res_data.get("status") == "success":
-                file_id = res_data.get("file_id")
-                view_link = res_data.get("url") or f"https://drive.google.com/file/d/{file_id}/view"
-                print(f"[✓] Google Drive 檔案上傳成功 (GAS 模式)！")
-                print(f"[*] 檔案 ID: {file_id}")
-                print(f"[*] 檢視連結: {view_link}")
-                return {
-                    "file_id": file_id,
-                    "name": file_name,
-                    "web_view_link": view_link,
-                    "size_mb": file_size_mb
-                }
-            else:
-                print(f"[!] Google Apps Script 回傳錯誤: {res_data.get('message')}")
-                return None
-        else:
-            print(f"[!] GAS 連線失敗 (HTTP {resp.status_code}): {resp.text}")
-            return None
+                print(f"[*] [GAS 上傳嘗試 {attempt}/{max_retries}] 正在發送 Base64 封包 (逾時設定: {timeout_seconds}s)...")
+                session = requests.Session()
+                resp = session.post(upload_url, json=payload, headers=headers, timeout=timeout_seconds, allow_redirects=True)
+                
+                if resp.status_code == 200:
+                    try:
+                        res_data = resp.json()
+                    except Exception:
+                        print(f"[!] GAS 返回非 JSON 格式內容: {resp.text[:200]}")
+                        if attempt < max_retries:
+                            time.sleep(3)
+                            continue
+                        return None
+
+                    if res_data.get("status") == "success":
+                        file_id = res_data.get("file_id")
+                        view_link = res_data.get("url") or f"https://drive.google.com/file/d/{file_id}/view"
+                        print(f"[✓] Google Drive 檔案上傳成功 (GAS 模式)！")
+                        print(f"[*] 檔案 ID: {file_id}")
+                        print(f"[*] 檢視連結: {view_link}")
+                        return {
+                            "file_id": file_id,
+                            "name": file_name,
+                            "web_view_link": view_link,
+                            "size_mb": file_size_mb
+                        }
+                    else:
+                        print(f"[!] Google Apps Script 回傳錯誤: {res_data.get('message')}")
+                        if attempt < max_retries:
+                            time.sleep(3)
+                            continue
+                        return None
+                else:
+                    print(f"[!] GAS 連線失敗 (HTTP {resp.status_code}): {resp.text}")
+                    if attempt < max_retries:
+                        time.sleep(3)
+                        continue
+                    return None
+
+            except requests.exceptions.Timeout:
+                print(f"[!] GAS 連線逾時 (超過 {timeout_seconds} 秒)，準備重試...")
+                if attempt < max_retries:
+                    time.sleep(5)
+                else:
+                    print(f"[!] GAS 上傳已達最大重試次數 ({max_retries})！")
+                    return None
+            except Exception as e:
+                print(f"[!] GAS 上傳異常 (第 {attempt} 次): {e}")
+                if attempt < max_retries:
+                    time.sleep(3)
+                else:
+                    return None
 
     except Exception as e:
-        print(f"[!] GAS 上傳異常: {e}")
+        print(f"[!] 檔案讀取或編碼異常: {e}")
         return None
+
+    return None
 
 
 def get_or_create_gdrive_subfolder(service, parent_folder_id: str, subfolder_name: str) -> Optional[str]:
@@ -196,12 +239,16 @@ def upload_file_to_gdrive(
     # 優先嘗試 1：Google Apps Script Web App 模式 (推薦，個人帳號無 quota 限制)
     gas_url = os.environ.get("GDRIVE_UPLOAD_URL", "").strip()
     if gas_url:
-        return upload_via_gas(local_file_path, gas_url, target_folder, subfolder=subfolder)
+        res = upload_via_gas(local_file_path, gas_url, target_folder, subfolder=subfolder)
+        if res:
+            return res
+        print("[*] GAS 上傳未完成，嘗試切換 Service Account 備援線路...")
 
-    # 優先嘗試 2：Google Cloud Service Account 模式
+    # 優先嘗試 2：Google Cloud Service Account 模式 (串流 Resumable Upload，支援任意大檔案)
     service = get_gdrive_service(service_account_key)
     if not service:
-        print("[*] 提示：未配置 GDRIVE_UPLOAD_URL 或 GDRIVE_SERVICE_ACCOUNT_KEY，略過雲端同步。")
+        if not gas_url:
+            print("[*] 提示：未配置 GDRIVE_UPLOAD_URL 或 GDRIVE_SERVICE_ACCOUNT_KEY，略過雲端同步。")
         return None
 
     try:
