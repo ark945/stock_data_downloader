@@ -338,6 +338,12 @@ class TPEXCloudCrawler:
 
             for idx, sym in enumerate(stock_codes, 1):
                 try:
+                    # 每 80 檔主動優雅重啟一次 Chrome (清空記憶體，確保海外 Runner 零崩潰)
+                    if idx > 1 and (idx - 1) % 80 == 0:
+                        try: page.quit()
+                        except Exception: pass
+                        page, temp_user_data = self._launch_browser_session(BASE_PORT)
+
                     cur_url = page.url or ""
                     cur_title = page.title or ""
                     if "brokerBS.html" not in cur_url or "520" in cur_title or "Error" in cur_title or "unknown error" in cur_title:

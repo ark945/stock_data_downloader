@@ -6,8 +6,10 @@ env:
 
 on:
   schedule:
-    # 每週一至週五 台灣時間 17:30 (UTC 09:30)
-    - cron: "30 09 * * 1-5"
+    # 1. 主要排程：每週一至週五 台灣時間 17:37 (UTC 09:37) - 避開整點/半點高峰
+    - cron: "37 09 * * 1-5"
+    # 2. 二次備援排程：每週二至週六 台灣時間 05:31 (UTC 21:31) - 開盤前極速檢查補漏
+    - cron: "31 21 * * 1-5"
   workflow_dispatch:
     inputs:
       target_date:
@@ -21,11 +23,60 @@ on:
 
 jobs:
   # -----------------------------------------------------------------
+  # 前置極速檢查：3 秒查詢 Google Drive 是否已有當日資料 (已存在則跳過後續)
+  # -----------------------------------------------------------------
+  pre-check:
+    name: 檢查 Google Drive 雲端資料庫狀態
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      should_skip: ${{ steps.check.outputs.should_skip }}
+      target_date: ${{ steps.check.outputs.target_date }}
+
+    steps:
+      - name: 檢出專案代碼 (Checkout)
+        uses: actions/checkout@v4
+
+      - name: 設定 Python 環境
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 安裝檢查依賴
+        run: |
+          pip install requests google-api-python-client google-auth
+
+      - name: 查詢 Google Drive 目標資料夾
+        id: check
+        env:
+          GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
+          GDRIVE_UPLOAD_URL: ${{ secrets.GDRIVE_UPLOAD_URL }}
+          GDRIVE_SERVICE_ACCOUNT_KEY: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_KEY }}
+          SPECIFIED_DATE: ${{ github.event.inputs.target_date }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          if [ -f "check_gdrive_exists.py" ]; then
+            CHECK_SCRIPT="check_gdrive_exists.py"
+          else
+            CHECK_SCRIPT="stock_data_downloader/check_gdrive_exists.py"
+          fi
+
+          # 若為手動指定日期且由使用者手動點擊 workflow_dispatch 觸發，不強制跳過
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ -n "$SPECIFIED_DATE" ]; then
+            echo "should_skip=false" >> $GITHUB_OUTPUT
+            echo "target_date=$SPECIFIED_DATE" >> $GITHUB_OUTPUT
+            echo "[*] 手動強制指定日期 ($SPECIFIED_DATE)，略過自動快篩，強制執行採集。"
+          else
+            python "$CHECK_SCRIPT" "$SPECIFIED_DATE"
+          fi
+
+  # -----------------------------------------------------------------
   # TWSE 上市：6 個獨立 shard；不做瀏覽器不受 CF 影響
   # -----------------------------------------------------------------
   twse-shards:
     name: TWSE-上市-分片-${{ matrix.shard }}
-    if: ${{ github.event_name == 'schedule' || github.event.inputs.market == 'all' || github.event.inputs.market == 'twse' || github.event.inputs.market == '' }}
+    needs: pre-check
+    if: ${{ needs.pre-check.outputs.should_skip != 'true' && (github.event_name == 'schedule' || github.event.inputs.market == 'all' || github.event.inputs.market == 'twse' || github.event.inputs.market == '') }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
     strategy:
@@ -55,7 +106,7 @@ jobs:
       - name: 執行 TWSE 分片爬蟲 (Shard ${{ matrix.shard }})
         env:
           PYTHONIOENCODING: "utf-8"
-          TARGET_DATE: ${{ github.event.inputs.target_date }}
+          TARGET_DATE: ${{ github.event.inputs.target_date || needs.pre-check.outputs.target_date }}
         run: |
           if [ -f "stock_crawler_coordinator.py" ]; then
             TARGET_SCRIPT="stock_crawler_coordinator.py"
@@ -84,7 +135,8 @@ jobs:
   # -----------------------------------------------------------------
   tpex-shards:
     name: TPEX-上櫃-分片-${{ matrix.shard }}
-    if: ${{ github.event_name == 'schedule' || github.event.inputs.market == 'all' || github.event.inputs.market == 'tpex' || github.event.inputs.market == '' }}
+    needs: pre-check
+    if: ${{ needs.pre-check.outputs.should_skip != 'true' && (github.event_name == 'schedule' || github.event.inputs.market == 'all' || github.event.inputs.market == 'tpex' || github.event.inputs.market == '') }}
     runs-on: ubuntu-latest
     timeout-minutes: 35
     strategy:
@@ -122,7 +174,7 @@ jobs:
         env:
           DISPLAY: ":99"
           PYTHONIOENCODING: "utf-8"
-          TARGET_DATE: ${{ github.event.inputs.target_date }}
+          TARGET_DATE: ${{ github.event.inputs.target_date || needs.pre-check.outputs.target_date }}
         run: |
           if [ -f "stock_crawler_coordinator.py" ]; then
             TARGET_SCRIPT="stock_crawler_coordinator.py"
@@ -151,8 +203,8 @@ jobs:
   # -----------------------------------------------------------------
   merge-twse:
     name: 聚合 TWSE 上市資料庫與 Log 歸檔
-    needs: twse-shards
-    if: ${{ always() && needs.twse-shards.result != 'skipped' && needs.twse-shards.result != 'cancelled' }}
+    needs: [pre-check, twse-shards]
+    if: ${{ always() && needs.pre-check.outputs.should_skip != 'true' && needs.twse-shards.result != 'skipped' && needs.twse-shards.result != 'cancelled' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -195,7 +247,7 @@ jobs:
           SENDER_EMAIL: ${{ secrets.SENDER_EMAIL || secrets.SMTP_USER }}
           SENDER_PASSWORD: ${{ secrets.SENDER_PASSWORD || secrets.SMTP_PASSWORD }}
           RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL || secrets.NOTIFICATION_EMAIL }}
-          TARGET_DATE: ${{ github.event.inputs.target_date }}
+          TARGET_DATE: ${{ github.event.inputs.target_date || needs.pre-check.outputs.target_date }}
         run: |
           mkdir -p download_shards output/logs
           find download_shards . -name "*_twse_shard_*.parquet" -exec cp {} output/ \; 2>/dev/null || true
@@ -232,8 +284,8 @@ jobs:
   # -----------------------------------------------------------------
   merge-tpex:
     name: 聚合 TPEX 上櫃資料庫與 Log 歸檔
-    needs: tpex-shards
-    if: ${{ always() && needs.tpex-shards.result != 'skipped' && needs.tpex-shards.result != 'cancelled' }}
+    needs: [pre-check, tpex-shards]
+    if: ${{ always() && needs.pre-check.outputs.should_skip != 'true' && needs.tpex-shards.result != 'skipped' && needs.tpex-shards.result != 'cancelled' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -276,7 +328,7 @@ jobs:
           SENDER_EMAIL: ${{ secrets.SENDER_EMAIL || secrets.SMTP_USER }}
           SENDER_PASSWORD: ${{ secrets.SENDER_PASSWORD || secrets.SMTP_PASSWORD }}
           RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL || secrets.NOTIFICATION_EMAIL }}
-          TARGET_DATE: ${{ github.event.inputs.target_date }}
+          TARGET_DATE: ${{ github.event.inputs.target_date || needs.pre-check.outputs.target_date }}
         run: |
           mkdir -p download_shards output/logs
           find download_shards . -name "*_tpex_shard_*.parquet" -exec cp {} output/ \; 2>/dev/null || true
@@ -315,8 +367,8 @@ jobs:
   # -----------------------------------------------------------------
   merge-all:
     name: 整合 TWSE + TPEX 全市場資料庫並推播
-    needs: [merge-twse, merge-tpex]
-    if: ${{ always() && (github.event_name == 'schedule' || github.event.inputs.market == 'all' || github.event.inputs.market == '') && (needs.merge-twse.result == 'success' || needs.merge-tpex.result == 'success') }}
+    needs: [pre-check, merge-twse, merge-tpex]
+    if: ${{ always() && needs.pre-check.outputs.should_skip != 'true' && (github.event_name == 'schedule' || github.event.inputs.market == 'all' || github.event.inputs.market == '') && (needs.merge-twse.result == 'success' || needs.merge-tpex.result == 'success') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -358,7 +410,7 @@ jobs:
           SENDER_EMAIL: ${{ secrets.SENDER_EMAIL || secrets.SMTP_USER }}
           SENDER_PASSWORD: ${{ secrets.SENDER_PASSWORD || secrets.SMTP_PASSWORD }}
           RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL || secrets.NOTIFICATION_EMAIL }}
-          TARGET_DATE: ${{ github.event.inputs.target_date }}
+          TARGET_DATE: ${{ github.event.inputs.target_date || needs.pre-check.outputs.target_date }}
         run: |
           mkdir -p download_shards output
           find download_shards . -name "api_absr1_*_twse.parquet" -exec cp {} output/ \; 2>/dev/null || true

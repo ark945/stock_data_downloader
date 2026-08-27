@@ -79,6 +79,15 @@ def _mp_local_worker_task(
         for idx, sym in enumerate(symbols, 1):
             success_crawl = False
             try:
+                # 每 80 檔主動優雅重啟一次 Chrome (清空 DevTools 記憶體與 Session 堆積，徹底根治長時間運行崩潰)
+                if idx > 1 and (idx - 1) % 80 == 0:
+                    try: page.quit()
+                    except Exception: pass
+                    page = ChromiumPage(co)
+                    page.listen.start(["afterTrading", "brokerBS"])
+                    page.get(tpex_url, retry=3, timeout=30)
+                    time.sleep(2.0)
+
                 for attempt in range(1, 4):
                     try:
                         # 1. 確保在 BrokerBS 頁面 (若斷線自動重啟 Chrome)
@@ -556,14 +565,15 @@ class TPEXLocalCrawler:
 
         for _ in range(len(processes)):
             try:
-                res = result_queue.get(timeout=1800)
+                # 支援單線程跑完全部 1007 檔 (約 80 分鐘)，超時設為 7200 秒 (2小時)
+                res = result_queue.get(timeout=7200)
                 if res and isinstance(res, tuple) and len(res) == 1:
                     failed_symbols.extend(res[0])
             except Exception:
                 pass
 
         for p in processes:
-            p.join(timeout=10)
+            p.join(timeout=30)
             if p.is_alive():
                 p.terminate()
 
