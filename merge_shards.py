@@ -1,18 +1,26 @@
 """
 全市場分點爬蟲分片聚合器 (Merge Shards & Multi-Channel Notifier)
-專門將分散式 Matrix 矩陣產生的多個 Parquet 片段合併為 1 份標準全市場資料庫
-並自動執行：
-1. 依據 market 參數產生標準檔名 (all / twse / tpex)
-2. Google Drive 雲端資料夾自動同步
-3. Telegram 即時推播 (附 Google Drive 直連)
-4. SMTP HTML Email 完整報表
+專門將分散式 Matrix 矩陣產生的多個 Parquet 片段與 Log 日誌合併為標準格式：
+1. 依據 market 參數產生標準 Parquet 檔名：
+   - 上市：api_absr1_YYYY-MM-DD_YYYY-MM-DD_twse.parquet
+   - 上櫃：api_absr1_YYYY-MM-DD_YYYY-MM-DD_tpex.parquet
+   - 全市場：api_absr1_YYYY-MM-DD_YYYY-MM-DD.parquet (TWSE + TPEX 雙市場聚合)
+2. 彙整分片日誌並上傳至 Google Drive 的 Log 資料夾：
+   - 上市：YYYY-MM-DD-twse.log
+   - 上櫃：YYYY-MM-DD-tpex.log (相容 YYYY-MM-DD-tpse.log)
+3. Google Drive 雲端同步 (資料庫放根目錄，Log 放 Log/ 目錄)
+4. Telegram 即時推播 (附 Google Drive 直連)
+5. SMTP HTML Email 完整視覺化報表
 """
 
 import os
+import re
 import sys
 import glob
 import time
+import shutil
 import smtplib
+from typing import Optional, Dict, Any, List
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timezone, timedelta
@@ -81,7 +89,8 @@ def send_email_alert(
         print("[*] 提示：未配置 SENDER_EMAIL (或 SMTP_USER) 與 SENDER_PASSWORD，略過 Email 發送。")
         return False
 
-    market_title = "上市 (TWSE)" if market.lower() == "twse" else ("上櫃 (TPEX)" if market.lower() == "tpex" else "全市場")
+    market_title = "上市 (TWSE)" if market.lower() == "twse" else ("上櫃 (TPEX)" if market.lower() == "tpex" else "全市場 (上市+上櫃)")
+    node_desc = "6 個獨立 IP 並行" if market.lower() == "twse" else ("20 個獨立 IP 並行" if market.lower() == "tpex" else "26 個獨立矩陣節點並行")
 
     try:
         subject = f"🚀 【台股{market_title}分點日報】{trade_date} 雲端矩陣採集完成 ({total_symbols:,} 檔 / {total_rows:,} 筆)"
@@ -99,7 +108,7 @@ def send_email_alert(
             <div style="max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 10px; overflow: hidden; box-shadow: 0 4px 15px rgba(0,0,0,0.08);">
                 <div style="background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%); color: #ffffff; padding: 25px; text-align: center;">
                     <h2 style="margin: 0; font-size: 22px;">📊 台股{market_title}分點買賣日報表</h2>
-                    <p style="margin: 8px 0 0 0; opacity: 0.9; font-size: 14px;">6-Runner 雲端分散式矩陣極速採集成功</p>
+                    <p style="margin: 8px 0 0 0; opacity: 0.9; font-size: 14px;">雲端分散式矩陣極速採集成功</p>
                 </div>
                 <div style="padding: 25px;">
                     <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;">
@@ -108,11 +117,11 @@ def send_email_alert(
                         <tr style="border-bottom: 1px solid #edf2f7;"><td style="padding: 10px 0; color: #718096; font-size: 14px;">🏢 涵蓋標的數</td><td style="padding: 10px 0; font-weight: bold; text-align: right; color: #2b6cb0;">{total_symbols:,} 檔</td></tr>
                         <tr style="border-bottom: 1px solid #edf2f7;"><td style="padding: 10px 0; color: #718096; font-size: 14px;">📈 明細總筆數</td><td style="padding: 10px 0; font-weight: bold; text-align: right; color: #2f855a;">{total_rows:,} 列</td></tr>
                         <tr style="border-bottom: 1px solid #edf2f7;"><td style="padding: 10px 0; color: #718096; font-size: 14px;">📦 資料庫容量</td><td style="padding: 10px 0; font-weight: bold; text-align: right; color: #4a5568;">{file_size_mb:.2f} MB (Parquet)</td></tr>
-                        <tr><td style="padding: 10px 0; color: #718096; font-size: 14px;">⚡ 雲端矩陣節點</td><td style="padding: 10px 0; font-weight: bold; text-align: right; color: #d69e2e;">6 個獨立 IP 並行</td></tr>
+                        <tr><td style="padding: 10px 0; color: #718096; font-size: 14px;">⚡ 雲端矩陣節點</td><td style="padding: 10px 0; font-weight: bold; text-align: right; color: #d69e2e;">{node_desc}</td></tr>
                     </table>
                     {gdrive_btn}
                     <div style="background: #ebf8ff; border-left: 4px solid #3182ce; padding: 12px 15px; border-radius: 4px; font-size: 13px; color: #2b6cb0;">
-                        ✅ <b>100% 完整採集</b>：所有個股分點明細已標準化歸檔。
+                        ✅ <b>100% 完整採集</b>：所有個股分點明細與執行日誌已標準化歸檔至 Google Drive。
                     </div>
                 </div>
                 <div style="background: #f7fafc; padding: 15px; text-align: center; color: #a0aec0; font-size: 12px; border-top: 1px solid #edf2f7;">
@@ -143,13 +152,132 @@ def send_email_alert(
         return False
 
 
+def extract_shard_number(file_path: str) -> int:
+    """從日誌檔名或路徑中提取 shard 編號以進行數值排序"""
+    match = re.search(r"shard_(\d+)", file_path, re.IGNORECASE)
+    if match:
+        return int(match.group(1))
+    match_num = re.search(r"_(\d+)\.log", file_path, re.IGNORECASE)
+    if match_num:
+        return int(match_num.group(1))
+    return 9999
+
+
+def merge_log_shards(market: str = "twse", trade_date: str = "", output_dir: str = "output") -> Optional[str]:
+    """
+    彙整指定市場 (TWSE / TPEX) 的所有分片執行日誌，輸出為 YYYY-MM-DD-twse.log / YYYY-MM-DD-tpex.log
+    並自動上傳至 Google Drive 的 Log 資料夾
+    """
+    market_lower = market.lower().strip()
+    if market_lower not in ["twse", "tpex"]:
+        print(f"[*] 市場 {market} 略過獨立分片 Log 彙整")
+        return None
+
+    if not trade_date:
+        trade_date = get_taipei_now().strftime("%Y-%m-%d")
+
+    print(f"\n==================================================")
+    print(f"[*] 開始彙整 {market.upper()} 分片日誌 (Log Consolidation)...")
+    print(f"[*] 交易日期: {trade_date}")
+    print(f"==================================================")
+
+    # 搜尋分片 Log 檔案 (支援 logs/, output/logs/, download_shards/ 等路徑)
+    search_patterns = [
+        os.path.join(output_dir, "logs", f"crawler_{market_lower}_shard_*.log"),
+        os.path.join(output_dir, f"crawler_{market_lower}_shard_*.log"),
+        os.path.join("logs", f"crawler_{market_lower}_shard_*.log"),
+        os.path.join("download_shards", "**", f"crawler_{market_lower}_shard_*.log"),
+        os.path.join(".", "**", f"crawler_{market_lower}_shard_*.log"),
+    ]
+
+    found_logs = set()
+    for pat in search_patterns:
+        for f in glob.glob(pat, recursive=True):
+            found_logs.add(os.path.abspath(f))
+
+    log_files = sorted(list(found_logs), key=extract_shard_number)
+
+    if not log_files:
+        print(f"[!] 未找到任何 {market.upper()} 分片日誌檔案 (crawler_{market_lower}_shard_*.log)")
+        return None
+
+    print(f"[+] 找到 {len(log_files)} 個 {market.upper()} 分片日誌檔案，正在按 Shard 順序彙整：")
+    for f in log_files:
+        print(f"  - Shard {extract_shard_number(f)}: {os.path.basename(f)} ({os.path.getsize(f):,} bytes)")
+
+    final_log_filename = f"{trade_date}-{market_lower}.log"
+    out_logs_dir = os.path.join(output_dir, "logs")
+    os.makedirs(out_logs_dir, exist_ok=True)
+    final_log_path = os.path.join(out_logs_dir, final_log_filename)
+
+    with open(final_log_path, "w", encoding="utf-8") as outfile:
+        outfile.write(f"{'='*80}\n")
+        outfile.write(f"📊 台股券商分點爬蟲 - 【{market.upper()}】全分片執行日誌整合報表\n")
+        outfile.write(f"📅 交易日期: {trade_date}\n")
+        outfile.write(f"🕒 彙整時戳: {get_taipei_now().strftime('%Y-%m-%d %H:%M:%S')} (UTC+8)\n")
+        outfile.write(f"⚡ 彙整分片數量: {len(log_files)} 個獨立節點\n")
+        outfile.write(f"{'='*80}\n\n")
+
+        for log_f in log_files:
+            shard_id = extract_shard_number(log_f)
+            outfile.write(f"\n{'='*80}\n")
+            outfile.write(f">>> 【{market.upper()} 分片節點 Shard #{shard_id}】執行紀錄: {os.path.basename(log_f)}\n")
+            outfile.write(f"{'='*80}\n")
+            try:
+                with open(log_f, "r", encoding="utf-8", errors="replace") as infile:
+                    content = infile.read()
+                    outfile.write(content)
+                    if not content.endswith("\n"):
+                        outfile.write("\n")
+            except Exception as e:
+                outfile.write(f"[!] 讀取日誌內容失敗: {e}\n")
+
+    # 複製一份至 output 根目錄方便 Actions 產物收集
+    root_log_path = os.path.join(output_dir, final_log_filename)
+    try:
+        shutil.copy2(final_log_path, root_log_path)
+    except Exception:
+        pass
+
+    log_size_kb = os.path.getsize(final_log_path) / 1024
+    print(f"[✓] {market.upper()} 分片日誌彙整完成: {final_log_path} ({log_size_kb:.1f} KB)")
+
+    # 若為 tpex，同時產出一份相容別名 yyyy-mm-dd-tpse.log
+    if market_lower == "tpex":
+        tpse_alias_path = os.path.join(out_logs_dir, f"{trade_date}-tpse.log")
+        try:
+            shutil.copy2(final_log_path, tpse_alias_path)
+            shutil.copy2(final_log_path, os.path.join(output_dir, f"{trade_date}-tpse.log"))
+        except Exception:
+            pass
+
+    # 自動同步上傳至 Google Drive 的 "Log" 資料夾
+    try:
+        from gdrive_sync import upload_file_to_gdrive
+        print(f"[*] 正在將彙整日誌 {final_log_filename} 上傳至 Google Drive 的 'Log' 資料夾...")
+        gdrive_res = upload_file_to_gdrive(final_log_path, subfolder="Log")
+        if gdrive_res:
+            print(f"[✓] 日誌已成功同步至 Google Drive Log 資料夾！(ID: {gdrive_res.get('file_id')})")
+    except Exception as e:
+        print(f"[!] 上傳日誌至 Google Drive 異常: {e}")
+
+    return final_log_path
+
+
 def merge_parquet_shards(output_dir: str = "output", trade_date: str = "", market: str = "all"):
+    """
+    彙整 Parquet 分片檔案：
+    - market == "twse": 合併上市分片 -> api_absr1_{date}_{date}_twse.parquet + 彙整 TWSE 日誌
+    - market == "tpex": 合併上櫃分片 -> api_absr1_{date}_{date}_tpex.parquet + 彙整 TPEX 日誌
+    - market == "all": 合併上市與上櫃資料庫 -> api_absr1_{date}_{date}.parquet (全市場整合檔)
+    """
     if not os.path.isabs(output_dir):
         output_dir = os.path.join(os.path.dirname(__file__), output_dir)
+    os.makedirs(output_dir, exist_ok=True)
 
     market = (market or os.environ.get("MARKET") or "all").lower().strip()
     market_suffix = f"_{market}" if market in ["twse", "tpex"] else ""
-    market_title = "上市 (TWSE)" if market == "twse" else ("上櫃 (TPEX)" if market == "tpex" else "全市場")
+    market_title = "上市 (TWSE)" if market == "twse" else ("上櫃 (TPEX)" if market == "tpex" else "全市場 (上市+上櫃整合)")
 
     print(f"==================================================")
     print(f"[*] 全市場分片聚合器 (Merge Shards) 啟動")
@@ -158,33 +286,44 @@ def merge_parquet_shards(output_dir: str = "output", trade_date: str = "", marke
     print(f"==================================================")
     sys.stdout.flush()
 
-    shard_glob = f"*_{market}_shard_*.parquet" if market in ["twse", "tpex"] else "*_shard_*.parquet"
-    shard_files = sorted(glob.glob(os.path.join(output_dir, shard_glob)))
+    # 1. 搜尋待合併的 Parquet 檔案
+    target_files = []
+    if market == "all":
+        # 全市場模式：優先尋找已產出的上市與上櫃標準檔，若無則搜尋全部分片檔
+        twse_and_tpex = glob.glob(os.path.join(output_dir, "api_absr1_*_twse.parquet")) + \
+                        glob.glob(os.path.join(output_dir, "api_absr1_*_tpex.parquet")) + \
+                        glob.glob(os.path.join("download_shards", "**", "api_absr1_*_twse.parquet"), recursive=True) + \
+                        glob.glob(os.path.join("download_shards", "**", "api_absr1_*_tpex.parquet"), recursive=True)
+        target_files = sorted(list(set(twse_and_tpex)))
+        if not target_files:
+            # 備援搜尋全部分片檔
+            target_files = sorted(glob.glob(os.path.join(output_dir, "*_shard_*.parquet")))
+            if not target_files:
+                target_files = sorted(glob.glob(os.path.join(".", "**", "*_shard_*.parquet"), recursive=True))
+    else:
+        shard_glob = f"*_{market}_shard_*.parquet"
+        target_files = sorted(glob.glob(os.path.join(output_dir, shard_glob)))
+        if not target_files:
+            target_files = sorted(glob.glob(os.path.join(".", "**", shard_glob), recursive=True))
+            if target_files:
+                for sf in target_files:
+                    dest = os.path.join(output_dir, os.path.basename(sf))
+                    shutil.copy2(sf, dest)
+                target_files = sorted(glob.glob(os.path.join(output_dir, shard_glob)))
 
-    if not shard_files:
-        print(f"[!] 未在 output/ 找到 {market} 分片檔案 (pattern: {shard_glob})，搜尋工作區其他目錄...")
-        shard_files = sorted(glob.glob(os.path.join(".", "**", shard_glob), recursive=True))
-        if shard_files:
-            print(f"[+] 在其他子目錄找到 {len(shard_files)} 個分片檔案，正在集中複製...")
-            for sf in shard_files:
-                import shutil
-                dest = os.path.join(output_dir, os.path.basename(sf))
-                shutil.copy2(sf, dest)
-            shard_files = sorted(glob.glob(os.path.join(output_dir, shard_glob)))
-
-    if not shard_files:
-        print("[!] 查無任何分片產物！檢查是否已有單一完整檔...")
-        existing = glob.glob(os.path.join(output_dir, "api_absr1_*.parquet"))
+    if not target_files:
+        print("[!] 查無任何待合併的 Parquet 產物！檢查是否已有單一完整檔...")
+        existing = glob.glob(os.path.join(output_dir, f"api_absr1_*{market_suffix}.parquet"))
         if existing:
             print(f"[✓] 已存在完整資料庫: {existing[0]}")
         return
 
-    print(f"[+] 找到 {len(shard_files)} 個分片檔案:")
-    for f in shard_files:
+    print(f"[+] 找到 {len(target_files)} 個待合併 Parquet 檔案:")
+    for f in target_files:
         print(f"  - {os.path.basename(f)} ({os.path.getsize(f):,} bytes)")
 
     dfs = []
-    for f in shard_files:
+    for f in target_files:
         try:
             df = pd.read_parquet(f)
             dfs.append(df)
@@ -212,7 +351,7 @@ def merge_parquet_shards(output_dir: str = "output", trade_date: str = "", marke
     file_size_mb = os.path.getsize(final_parquet) / (1024 * 1024)
 
     print("==================================================")
-    print(f"[✓] 全市場分片聚合完成！")
+    print(f"[✓] Parquet 資料聚合完成！")
     print(f"[*] 交易日期: {trade_date}")
     print(f"[*] 目標市場: {market.upper()} ({market_title})")
     print(f"[*] 涵蓋標的數: {total_symbols:,} 檔")
@@ -220,12 +359,17 @@ def merge_parquet_shards(output_dir: str = "output", trade_date: str = "", marke
     print(f"[*] 產檔規格命名: {final_filename} ({file_size_mb:.2f} MB)")
     print("==================================================")
 
-    # 清理分片檔
-    for f in shard_files:
-        try: os.remove(f)
-        except OSError: pass
+    # 2. 執行分片 Log 彙整 (TWSE 與 TPEX 模式下)
+    if market in ["twse", "tpex"]:
+        merge_log_shards(market=market, trade_date=trade_date, output_dir=output_dir)
 
-    # 1. 自動同步上傳至 Google Drive 目標資料夾
+    # 清理中間分片檔 (全市場整合檔保留 twse / tpex 檔，僅刪除 shard_ 檔案)
+    for f in target_files:
+        if "_shard_" in os.path.basename(f):
+            try: os.remove(f)
+            except OSError: pass
+
+    # 3. 自動同步上傳 Parquet 資料庫至 Google Drive 根目錄
     gdrive_link = None
     try:
         from gdrive_sync import upload_file_to_gdrive
@@ -235,27 +379,28 @@ def merge_parquet_shards(output_dir: str = "output", trade_date: str = "", marke
     except Exception as e:
         print(f"[!] Google Drive 同步異常: {e}")
 
-    # 2. Telegram 即時推播
+    # 4. Telegram 即時推播
     tg_bot = os.environ.get("TELEGRAM_BOT_TOKEN")
     tg_chat = os.environ.get("TELEGRAM_CHAT_ID")
     if tg_bot and tg_chat:
         gdrive_str = f"☁️ *Google Drive*：[點此立即檢視/下載]({gdrive_link})\n" if gdrive_link else ""
+        node_str = "6 個獨立 IP 節點平行極速完成！" if market == "twse" else ("20 個獨立 IP 節點平行極速完成！" if market == "tpex" else "TWSE + TPEX 全市場 26 節點矩陣聚合完成！")
         tg_msg = (
-            f"🚀 *【台股{market_title}分點日報表】6 矩陣分散極速採集完成！*\n\n"
+            f"🚀 *【台股{market_title}分點日報表】雲端矩陣極速採集完成！*\n\n"
             f"📅 *交易日期*：`{trade_date}`\n"
             f"🎯 *目標市場*：`{market.upper()}` ({market_title})\n"
             f"📊 *涵蓋標的*：`{total_symbols:,}` 檔\n"
             f"📈 *明細筆數*：`{total_rows:,}` 筆\n"
             f"📦 *產檔規格*：`{final_filename}` (`{file_size_mb:.2f} MB`)\n"
-            f"⚡ *雲端分散式矩陣*：6 個獨立 IP 節點平行極速完成！\n"
+            f"⚡ *雲端分散式矩陣*：{node_str}\n"
             f"{gdrive_str}\n"
-            f"✅ 資料已自動歸檔並開放下載！"
+            f"✅ 資料庫與日誌已自動歸檔至 Google Drive！"
         )
         send_telegram_alert(tg_bot, tg_chat, tg_msg)
     else:
         print("[*] 提示：未設定 TELEGRAM_BOT_TOKEN 或 TELEGRAM_CHAT_ID，略過 Telegram 發送。")
 
-    # 3. Email 報表發送
+    # 5. Email 報表發送
     send_email_alert(
         trade_date=trade_date,
         total_symbols=total_symbols,

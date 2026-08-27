@@ -25,7 +25,7 @@ DEFAULT_GDRIVE_FOLDER_ID = ""
 SCOPES = ["https://www.googleapis.com/auth/drive"]
 
 
-def upload_via_gas(local_file_path: str, upload_url: str, folder_id: str) -> Optional[Dict[str, Any]]:
+def upload_via_gas(local_file_path: str, upload_url: str, folder_id: str, subfolder: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """
     透過 Google Apps Script Web App 上傳檔案 (支援個人 Google 帳戶 15GB 空間)
     """
@@ -34,8 +34,14 @@ def upload_via_gas(local_file_path: str, upload_url: str, folder_id: str) -> Opt
     file_name = os.path.basename(local_file_path)
     file_size_mb = os.path.getsize(local_file_path) / (1024 * 1024)
 
+    # 若指定了 Log 子資料夾且有獨立的 GDRIVE_LOG_FOLDER_ID，優先採用
+    if subfolder and subfolder.lower() == "log":
+        log_folder_override = os.environ.get("GDRIVE_LOG_FOLDER_ID", "").strip()
+        if log_folder_override:
+            folder_id = log_folder_override
+
     print(f"[*] 正在透過 Google Apps Script 雲端橋接同步...")
-    print(f"[*] 目標資料夾 ID: {folder_id}")
+    print(f"[*] 目標資料夾 ID: {folder_id} (子目錄: {subfolder or '根目錄'})")
     print(f"[*] 同步檔案: {file_name} ({file_size_mb:.2f} MB)")
 
     try:
@@ -43,12 +49,15 @@ def upload_via_gas(local_file_path: str, upload_url: str, folder_id: str) -> Opt
             file_bytes = f.read()
 
         file_b64 = base64.b64encode(file_bytes).decode("utf-8")
+        mime_type = "text/plain" if file_name.endswith(".log") or file_name.endswith(".txt") else "application/octet-stream"
         payload = {
             "folder_id": folder_id,
             "filename": file_name,
             "file_base64": file_b64,
-            "mime_type": "application/octet-stream"
+            "mime_type": mime_type
         }
+        if subfolder:
+            payload["subfolder"] = subfolder
 
         headers = {"Content-Type": "application/json"}
         session = requests.Session()
@@ -81,6 +90,39 @@ def upload_via_gas(local_file_path: str, upload_url: str, folder_id: str) -> Opt
 
     except Exception as e:
         print(f"[!] GAS 上傳異常: {e}")
+        return None
+
+
+def get_or_create_gdrive_subfolder(service, parent_folder_id: str, subfolder_name: str) -> Optional[str]:
+    """
+    在指定父資料夾下查找或自動建立子資料夾，並回傳其 folder_id
+    """
+    try:
+        query = (
+            f"'{parent_folder_id}' in parents and "
+            f"name = '{subfolder_name}' and "
+            f"mimeType = 'application/vnd.google-apps.folder' and "
+            f"trashed = false"
+        )
+        results = service.files().list(q=query, fields="files(id, name)").execute()
+        items = results.get("files", [])
+        if items:
+            sub_id = items[0]["id"]
+            print(f"[✓] 找到 Google Drive 現有子資料夾: '{subfolder_name}' (ID: {sub_id})")
+            return sub_id
+
+        print(f"[+] Google Drive 中未找到 '{subfolder_name}' 子資料夾，正在自動建立...")
+        folder_metadata = {
+            "name": subfolder_name,
+            "mimeType": "application/vnd.google-apps.folder",
+            "parents": [parent_folder_id]
+        }
+        created = service.files().create(body=folder_metadata, fields="id, name").execute()
+        sub_id = created.get("id")
+        print(f"[✓] Google Drive 子資料夾 '{subfolder_name}' 建立成功 (ID: {sub_id})！")
+        return sub_id
+    except Exception as e:
+        print(f"[!] 查找/建立 Google Drive 子資料夾 '{subfolder_name}' 失敗: {e}")
         return None
 
 
@@ -132,10 +174,12 @@ def get_gdrive_service(service_account_info_or_path: Optional[str] = None):
 def upload_file_to_gdrive(
     local_file_path: str,
     folder_id: Optional[str] = None,
-    service_account_key: Optional[str] = None
+    service_account_key: Optional[str] = None,
+    subfolder: Optional[str] = None
 ) -> Optional[Dict[str, Any]]:
     """
     上傳或覆蓋檔案至 Google Drive 指定資料夾 (自適應 GAS 模式與 Service Account 模式)
+    可透過 subfolder 參數指定子資料夾 (例如 "Log")
     """
     if not os.path.exists(local_file_path):
         print(f"[!] 上傳失敗：找不到本地檔案 {local_file_path}")
@@ -152,7 +196,7 @@ def upload_file_to_gdrive(
     # 優先嘗試 1：Google Apps Script Web App 模式 (推薦，個人帳號無 quota 限制)
     gas_url = os.environ.get("GDRIVE_UPLOAD_URL", "").strip()
     if gas_url:
-        return upload_via_gas(local_file_path, gas_url, target_folder)
+        return upload_via_gas(local_file_path, gas_url, target_folder, subfolder=subfolder)
 
     # 優先嘗試 2：Google Cloud Service Account 模式
     service = get_gdrive_service(service_account_key)
@@ -163,6 +207,12 @@ def upload_file_to_gdrive(
     try:
         from googleapiclient.http import MediaFileUpload
 
+        # 若指定了子資料夾，切換目標 folder_id 至該子資料夾
+        if subfolder:
+            sub_id = get_or_create_gdrive_subfolder(service, target_folder, subfolder)
+            if sub_id:
+                target_folder = sub_id
+
         print(f"[*] 正在連線 Google Drive API (目標資料夾 ID: {target_folder})...")
         print(f"[*] 準備同步檔案: {file_name} ({file_size_mb:.2f} MB)")
 
@@ -171,7 +221,8 @@ def upload_file_to_gdrive(
         results = service.files().list(q=query, fields="files(id, name)").execute()
         items = results.get("files", [])
 
-        media = MediaFileUpload(local_file_path, resumable=True)
+        mime_type = "text/plain" if file_name.endswith(".log") or file_name.endswith(".txt") else "application/octet-stream"
+        media = MediaFileUpload(local_file_path, mimetype=mime_type, resumable=True)
 
         if items:
             existing_file_id = items[0]["id"]
@@ -217,6 +268,7 @@ def upload_file_to_gdrive(
 if __name__ == "__main__":
     if len(sys.argv) > 1:
         target_path = sys.argv[1]
-        upload_file_to_gdrive(target_path)
+        target_subfolder = sys.argv[2] if len(sys.argv) > 2 else None
+        upload_file_to_gdrive(target_path, subfolder=target_subfolder)
     else:
-        print("用法: python gdrive_sync.py <本地檔案路徑>")
+        print("用法: python gdrive_sync.py <本地檔案路徑> [子資料夾名稱例如 Log]")

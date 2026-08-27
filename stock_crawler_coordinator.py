@@ -332,9 +332,15 @@ def main():
     # 自動建立 logs/ 資料夾並啟用帶有時間戳的日誌記錄
     logs_dir = os.path.join(os.path.dirname(__file__), "logs")
     os.makedirs(logs_dir, exist_ok=True)
+    out_logs_dir = os.path.join(args.output_dir or os.path.join(os.path.dirname(__file__), "output"), "logs")
+    os.makedirs(out_logs_dir, exist_ok=True)
+
     ts_str = get_taipei_now().strftime("%Y%m%d_%H%M%S")
     market_tag = args.market
-    log_filename = f"crawler_{market_tag}_{ts_str}.log"
+    if args.num_shards > 1:
+        log_filename = f"crawler_{market_tag}_shard_{args.shard_id}.log"
+    else:
+        log_filename = f"crawler_{market_tag}_{ts_str}.log"
     log_filepath = os.path.join(logs_dir, log_filename)
 
     tee_logger = TeeLogger(log_filepath)
@@ -362,6 +368,12 @@ def main():
         sys.stdout = orig_stdout
         sys.stderr = orig_stderr
         tee_logger.close()
+        # 同步複製一份至 output/logs 目錄以利 GitHub Actions 產物收集
+        try:
+            import shutil
+            shutil.copy2(log_filepath, os.path.join(out_logs_dir, log_filename))
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
