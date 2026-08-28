@@ -312,7 +312,14 @@ class TPEXCloudCrawler:
         page.listen.start(["afterTrading", "brokerBS"])
 
         page.get(self.TPEX_URL, retry=3, timeout=30)
-        time.sleep(3.0)
+        
+        # 雲端首發預熱：主動等待 Cloudflare Turnstile 初次驗證通過，徹底消滅 Cold Start 亂流
+        for _ in range(25):
+            time.sleep(0.3)
+            tok = page.run_js("return document.querySelector('[name=cf-turnstile-response]') ? document.querySelector('[name=cf-turnstile-response]').value : '';")
+            if tok and len(tok) > 20:
+                break
+        time.sleep(1.0)
         return page, temp_user_data
 
     def crawl_stocks(
@@ -325,7 +332,6 @@ class TPEXCloudCrawler:
         if not stock_codes:
             return [], []
 
-        BASE_PORT = 9333
         collected_dfs = []
         failed_symbols = []
         total = len(stock_codes)
@@ -335,15 +341,15 @@ class TPEXCloudCrawler:
         processed_symbols = set()
         try:
             print(f"[*] 正在啟動 TPEX 雲端單一持久化引擎 (CDP 封包監聽模式，待抓取: {total} 檔)...")
-            page, temp_user_data = self._launch_browser_session(BASE_PORT)
+            page, temp_user_data = self._launch_browser_session()
             start_t = time.time()
 
             for idx, sym in enumerate(stock_codes, 1):
                 success_for_sym = False
                 ts_res = get_taipei_now().strftime("%H:%M:%S")
 
-                # 每 12 檔主動優雅重啟一次 Chrome (清空記憶體與 Session，永遠走在 Token 壽命前面)
-                if idx > 1 and (idx - 1) % 12 == 0:
+                # 每 10 檔主動優雅重啟一次 Chrome (清空記憶體與 Session，永遠走在 Token 壽命前面)
+                if idx > 1 and (idx - 1) % 10 == 0:
                     try: page.quit()
                     except Exception: pass
                     page, temp_user_data = self._launch_browser_session()
