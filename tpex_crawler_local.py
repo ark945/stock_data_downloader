@@ -603,7 +603,7 @@ class TPEXLocalCrawler:
         self,
         stock_codes: List[str],
         trade_date: str,
-        max_rounds: int = 2,
+        max_rounds: int = 3,
         cooldown_sec: int = 15,
         workers: int = 4
     ) -> Tuple[List[pd.DataFrame], List[str]]:

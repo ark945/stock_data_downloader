@@ -521,10 +521,10 @@ class TPEXCloudCrawler:
         self,
         stock_codes: List[str],
         trade_date: str,
-        max_rounds: int = 2,
-        cooldown_sec: int = 10
+        max_rounds: int = 3,
+        cooldown_sec: int = 8
     ) -> Tuple[List[pd.DataFrame], List[str]]:
-        """雲端多輪自適應安全補抓機制 (針對 CF 520 / 逾時進行第 2 輪補抓)"""
+        """雲端多輪自適應安全補抓機制 (針對 CF 520 / 逾時進行最多 3 輪深度補抓)"""
         all_dfs = []
         pending_symbols = list(stock_codes)
 
