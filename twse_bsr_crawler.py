@@ -298,10 +298,10 @@ class TWSEBrokerCrawler:
         symbols: List[str],
         trade_date: str = "",
         max_workers: int = 4,
-        max_retry_rounds: int = 6
+        max_retry_rounds: int = 7
     ) -> Tuple[List[pd.DataFrame], List[str], int]:
         """
-        批次抓取指定上市股票清單 (支援最多 6 輪自適應安全補抓機制)
+        批次抓取指定上市股票清單 (支援最多 7 輪自適應安全防護與終極收斂補抓機制)
         :return: (all_dfs, final_failed_symbols, total_rounds_executed)
         """
         if not trade_date:
@@ -309,11 +309,11 @@ class TWSEBrokerCrawler:
 
         total_symbols = len(symbols)
         print(f"==================================================")
-        print(f"[*] TWSE 上市券商買賣日報表爬蟲 (6 輪自適應安全防護版)")
+        print(f"[*] TWSE 上市券商買賣日報表爬蟲 (7 輪終極自適應安全防護版)")
         print(f"[*] 目標交易日期: {trade_date}")
         print(f"[*] 待抓取標的數: {total_symbols} 檔")
         print(f"[*] 並行執行緒數: {max_workers} Workers (第 1 輪)")
-        print(f"[*] 最大補抓輪數: {max_retry_rounds} 輪 (自適應降速防 Ban)")
+        print(f"[*] 最大補抓輪數: {max_retry_rounds} 輪 (含第 7 輪深度收斂跑到完機制)")
         print(f"==================================================")
         sys.stdout.flush()
 
@@ -323,7 +323,7 @@ class TWSEBrokerCrawler:
         total_rows = 0
         start_time = time.time()
 
-        # 第 1 輪：雙線程標準並行抓取
+        # 第 1 輪：標準並行抓取
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_to_sym = {
                 executor.submit(self._crawl_single_worker, sym, trade_date): sym
@@ -358,18 +358,25 @@ class TWSEBrokerCrawler:
 
         rounds_executed = 1
 
-        # 第 2 ~ N 輪階梯式自適應安全補抓
-        delay_schedule = [1.2, 1.8, 2.5, 3.2, 4.0]  # 各輪安全延遲秒數
+        # 第 2 ~ 7 輪階梯式自適應安全補抓 (第 7 輪為終極深層收斂輪)
+        delay_schedule = [1.2, 1.8, 2.5, 3.2, 4.0, 4.8]  # 各輪安全延遲秒數
         
         while failed_symbols and rounds_executed < max_retry_rounds:
             rounds_executed += 1
             retry_count = len(failed_symbols)
+            is_final_round = (rounds_executed == max_retry_rounds)
             current_delay = delay_schedule[min(rounds_executed - 2, len(delay_schedule) - 1)]
-            
+            current_workers = 2 if is_final_round else min(4, retry_count)
+            single_stock_retries = 8 if is_final_round else (6 if rounds_executed >= 5 else 4)
+
             ts_round = get_taipei_now().strftime("%H:%M:%S")
             print(f"\n" + "-"*50)
-            print(f"[{ts_round}] [*] 啟動第 {rounds_executed}/{max_retry_rounds} 輪精準安全補抓佇列 (待補抓: {retry_count} 檔)")
-            print(f"[{ts_round}] [*] 安全防護策略: 4-Workers 安全並行模式, 請求間隔 {current_delay}s, 預防 TWSE 頻率限制")
+            if is_final_round:
+                print(f"[{ts_round}] 🎯 【啟動第 {rounds_executed}/{max_retry_rounds} 輪終極收斂跑到底機制】(待補抓: {retry_count} 檔)")
+                print(f"[{ts_round}] [*] 終極防護策略: {current_workers}-Workers 溫和無干擾模式, 請求間隔 {current_delay}s, 單檔最高 {single_stock_retries} 次深度辨識重試！")
+            else:
+                print(f"[{ts_round}] [*] 啟動第 {rounds_executed}/{max_retry_rounds} 輪精準安全補抓佇列 (待補抓: {retry_count} 檔)")
+                print(f"[{ts_round}] [*] 安全防護策略: {current_workers}-Workers 安全並行模式, 請求間隔 {current_delay}s, 單檔 {single_stock_retries} 次重試")
             print(f"-"*50)
             sys.stdout.flush()
             
@@ -386,12 +393,12 @@ class TWSEBrokerCrawler:
                 except Exception:
                     pass
 
-            retry_crawler = TWSEBrokerCrawler(delay_sec=current_delay, max_retries=4)
+            retry_crawler = TWSEBrokerCrawler(delay_sec=current_delay, max_retries=single_stock_retries)
             still_failed = []
             retry_success = 0
             retry_done_cnt = 0
 
-            with ThreadPoolExecutor(max_workers=4) as retry_exec:
+            with ThreadPoolExecutor(max_workers=current_workers) as retry_exec:
                 future_map = {
                     retry_exec.submit(retry_crawler._crawl_single_worker, s, trade_date): s
                     for s in failed_symbols
@@ -408,10 +415,12 @@ class TWSEBrokerCrawler:
                         all_dfs.append(df)
                         total_rows += len(df)
                         retry_success += 1
-                        print(f"[{ts_item}]   [第{rounds_executed}輪 {retry_done_cnt}/{retry_count}] [OK] {sym} {name_str} -> 成功補回 {len(df)} 筆！")
+                        tag = "[終極救回 OK]" if is_final_round else "[OK]"
+                        print(f"[{ts_item}]   [第{rounds_executed}輪 {retry_done_cnt}/{retry_count}] {tag} {sym} {name_str} -> 成功補回 {len(df)} 筆！")
                     else:
                         still_failed.append(sym)
-                        print(f"[{ts_item}]   [第{rounds_executed}輪 {retry_done_cnt}/{retry_count}] [待下輪補抓] {sym} {name_str}")
+                        tag = "[確認零成交/略過]" if is_final_round else "[待下輪補抓]"
+                        print(f"[{ts_item}]   [第{rounds_executed}輪 {retry_done_cnt}/{retry_count}] {tag} {sym} {name_str}")
                     sys.stdout.flush()
 
             ts_done = datetime.now().strftime("%H:%M:%S")
@@ -422,6 +431,6 @@ class TWSEBrokerCrawler:
         if not failed_symbols:
             print(f"\n[{ts_all_done}] [+] 全市場標的 100% 抓取達成！(共執行 {rounds_executed} 輪)")
         else:
-            print(f"\n[{ts_all_done}] [!] 達到最大補抓輪數 ({max_retry_rounds} 輪)，剩餘未產出標的: {len(failed_symbols)} 檔")
+            print(f"\n[{ts_all_done}] [!] 達到最大補抓輪數 ({max_retry_rounds} 輪)，剩餘確認無成交標的: {len(failed_symbols)} 檔")
 
         return all_dfs, failed_symbols, rounds_executed
