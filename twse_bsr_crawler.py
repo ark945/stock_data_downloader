@@ -411,7 +411,7 @@ class TWSEBrokerCrawler:
                         print(f"[{ts_item}]   [第{rounds_executed}輪 {retry_done_cnt}/{retry_count}] [OK] {sym} {name_str} -> 成功補回 {len(df)} 筆！")
                     else:
                         still_failed.append(sym)
-                        print(f"[{ts_item}]   [第{rounds_executed}輪 {retry_done_cnt}/{retry_count}] [無交易/略過] {sym} {name_str}")
+                        print(f"[{ts_item}]   [第{rounds_executed}輪 {retry_done_cnt}/{retry_count}] [待下輪補抓] {sym} {name_str}")
                     sys.stdout.flush()
 
             ts_done = datetime.now().strftime("%H:%M:%S")
