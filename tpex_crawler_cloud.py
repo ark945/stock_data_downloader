@@ -279,19 +279,17 @@ class TPEXCloudCrawler:
             print(f"[!] 解析 TPEX CSV 失敗 ({stock_id}): {e}")
             return None
 
-    def _launch_browser_session(self, port: Optional[int] = None):
+    def _launch_browser_session(self, port: int = 9333):
         import json
-        import random
         from DrissionPage import ChromiumPage, ChromiumOptions
 
         temp_user_data = tempfile.mkdtemp()
-        actual_port = port if port is not None else random.randint(9300, 9800)
 
         if "DISPLAY" not in os.environ and os.name != "nt":
             os.environ["DISPLAY"] = ":99"
 
         co = ChromiumOptions()
-        co.set_local_port(actual_port)
+        co.set_local_port(port)
         if sys.platform.startswith("linux"):
             for bin_p in ["/usr/bin/chromium-browser", "/usr/bin/chromium", "/usr/bin/google-chrome"]:
                 if os.path.exists(bin_p):
@@ -312,14 +310,7 @@ class TPEXCloudCrawler:
         page.listen.start(["afterTrading", "brokerBS"])
 
         page.get(self.TPEX_URL, retry=3, timeout=30)
-        
-        # 雲端首發預熱：主動等待 Cloudflare Turnstile 初次驗證通過，徹底消滅 Cold Start 亂流
-        for _ in range(25):
-            time.sleep(0.3)
-            tok = page.run_js("return document.querySelector('[name=cf-turnstile-response]') ? document.querySelector('[name=cf-turnstile-response]').value : '';")
-            if tok and len(tok) > 20:
-                break
-        time.sleep(1.0)
+        time.sleep(2.5)
         return page, temp_user_data
 
     def crawl_stocks(
@@ -332,6 +323,7 @@ class TPEXCloudCrawler:
         if not stock_codes:
             return [], []
 
+        BASE_PORT = 9333
         collected_dfs = []
         failed_symbols = []
         total = len(stock_codes)
@@ -341,156 +333,147 @@ class TPEXCloudCrawler:
         processed_symbols = set()
         try:
             print(f"[*] 正在啟動 TPEX 雲端單一持久化引擎 (CDP 封包監聽模式，待抓取: {total} 檔)...")
-            page, temp_user_data = self._launch_browser_session()
+            page, temp_user_data = self._launch_browser_session(BASE_PORT)
             start_t = time.time()
 
             for idx, sym in enumerate(stock_codes, 1):
-                success_for_sym = False
-                ts_res = get_taipei_now().strftime("%H:%M:%S")
+                try:
+                    # 每 20 檔主動優雅重啟一次 Chrome (清空記憶體與 Session，避免 TPEX ~26 檔 Token 逾時)
+                    if idx > 1 and (idx - 1) % 20 == 0:
+                        try: page.quit()
+                        except Exception: pass
+                        page, temp_user_data = self._launch_browser_session(BASE_PORT)
 
-                for attempt in range(1, 4):
-                    try:
-                        cur_url = page.url or ""
-                        cur_title = page.title or ""
-                        if "brokerBS.html" not in cur_url or "520" in cur_title or "Error" in cur_title or "unknown error" in cur_title:
-                            page.get(self.TPEX_URL, retry=3, timeout=25)
-                            time.sleep(2.0)
+                    cur_url = page.url or ""
+                    cur_title = page.title or ""
+                    if "brokerBS.html" not in cur_url or "520" in cur_title or "Error" in cur_title or "unknown error" in cur_title:
+                        page.get(self.TPEX_URL, retry=3, timeout=25)
+                        time.sleep(2.0)
 
-                        # 1. 確保在目標頁面、清空已消費之舊 Token、輸入股票代碼並重置 Turnstile
-                        if "brokerBS.html" not in (page.url or "") or "search.html" in (page.url or ""):
-                            page.get(self.TPEX_URL, retry=2, timeout=20)
-                            time.sleep(1.5)
+                    # 1. 確保在目標頁面並輸入代碼
+                    if "brokerBS.html" not in (page.url or "") or "search.html" in (page.url or ""):
+                        page.get(self.TPEX_URL, retry=2, timeout=20)
+                        time.sleep(1.2)
 
+                    page.run_js(f"""
+                        const inp = document.querySelector('input.code') || document.querySelector('[name=code]');
+                        if (inp) {{
+                            inp.value = '{sym}';
+                            inp.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                            inp.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                        }}
+                    """)
+
+                    # 2. 換發全新 Turnstile Token (若未就緒則快速刷新確保)
+                    token_ready = False
+                    for _ in range(20):
+                        time.sleep(0.08)
+                        tok = page.run_js("return document.querySelector('[name=cf-turnstile-response]') ? document.querySelector('[name=cf-turnstile-response]').value : '';")
+                        if tok and len(tok) > 20:
+                            token_ready = True
+                            break
+
+                    if not token_ready:
+                        page.get(self.TPEX_URL, retry=2, timeout=20)
+                        time.sleep(1.2)
                         page.run_js(f"""
-                            // 清空上一檔已消費之舊 Token (避免被後端判定為重複/過期 Token)
-                            const cfInp = document.querySelector('[name=cf-turnstile-response]');
-                            if (cfInp) cfInp.value = '';
-
                             const inp = document.querySelector('input.code') || document.querySelector('[name=code]');
                             if (inp) {{
                                 inp.value = '{sym}';
                                 inp.dispatchEvent(new Event('input', {{ bubbles: true }}));
                                 inp.dispatchEvent(new Event('change', {{ bubbles: true }}));
                             }}
-
-                            // 呼叫 Cloudflare 官方 API 換發全新合法 Token
-                            if (window.turnstile && typeof window.turnstile.reset === 'function') {{
-                                try {{ window.turnstile.reset(); }} catch(e) {{}}
-                            }}
                         """)
-
-                        # 2. 等待 Cloudflare Turnstile 換發出全新的有效 Token (必須 > 20 字元)
-                        token_ready = False
-                        for _ in range(35):
-                            time.sleep(0.12)
+                        for _ in range(30):
+                            time.sleep(0.08)
                             tok = page.run_js("return document.querySelector('[name=cf-turnstile-response]') ? document.querySelector('[name=cf-turnstile-response]').value : '';")
                             if tok and len(tok) > 20:
                                 token_ready = True
                                 break
 
-                        if not token_ready:
-                            # 若 reset 沒出 Token，原地刷新整頁重新獲取
-                            page.get(self.TPEX_URL, retry=2, timeout=20)
-                            time.sleep(1.5)
-                            page.run_js(f"""
-                                const inp = document.querySelector('input.code') || document.querySelector('[name=code]');
-                                if (inp) {{
-                                    inp.value = '{sym}';
-                                    inp.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                                    inp.dispatchEvent(new Event('change', {{ bubbles: true }}));
-                                }}
-                            """)
-                            for _ in range(35):
-                                time.sleep(0.12)
-                                tok = page.run_js("return document.querySelector('[name=cf-turnstile-response]') ? document.querySelector('[name=cf-turnstile-response]').value : '';")
-                                if tok and len(tok) > 20:
-                                    token_ready = True
-                                    break
+                    # 3. 清空監聽佇列並點擊查詢按鈕 (100% 精準觸發 formblock 內部)
+                    page.listen.clear()
+                    page.run_js("""
+                        const btn = document.querySelector('div.formblock button[type="submit"]') || 
+                                    document.querySelector('form.formblock button[type="submit"]') ||
+                                    Array.from(document.querySelectorAll('div.formblock button, form.formblock button')).find(b => (b.innerText||'').includes('查詢'));
+                        if (btn) btn.click();
+                    """)
 
-                        # 3. 清空監聽佇列並點擊查詢按鈕
-                        page.listen.clear()
-                        page.run_js("""
-                            const btn = document.querySelector('div.formblock button[type="submit"]') || 
-                                        document.querySelector('form.formblock button[type="submit"]') ||
-                                        Array.from(document.querySelectorAll('div.formblock button, form.formblock button')).find(b => (b.innerText||'').includes('查詢'));
-                            if (btn) btn.click();
-                        """)
+                    pkt = page.listen.wait(timeout=6)
+                    ts_res = get_taipei_now().strftime("%H:%M:%S")
 
-                        pkt = page.listen.wait(timeout=6)
-                        ts_res = get_taipei_now().strftime("%H:%M:%S")
+                    if not pkt:
+                        failed_symbols.append(sym)
+                        print(f"[{ts_res}]   [上櫃 {idx}/{total}] [封包逾時] {sym}")
+                        # 封包逾時可能為 Session 卡死，主動重啟 Chrome
+                        try: page.quit()
+                        except Exception: pass
+                        page, temp_user_data = self._launch_browser_session(BASE_PORT)
+                        continue
 
-                        if not pkt:
-                            if attempt < 3:
-                                time.sleep(1.0)
-                                continue
-                            print(f"[{ts_res}]   [上櫃 {idx}/{total}] [封包逾時] {sym}")
-                            break
-
+                    body = None
+                    try:
+                        raw = pkt.response.body
+                        if isinstance(raw, (bytes, bytearray)):
+                            raw = raw.decode("utf-8", errors="replace")
+                        if isinstance(raw, str):
+                            raw = raw.strip()
+                            if raw.startswith("{") and raw.endswith("}"):
+                                body = json.loads(raw)
+                        elif isinstance(raw, dict):
+                            body = raw
+                    except Exception:
                         body = None
-                        try:
-                            raw = pkt.response.body
-                            if isinstance(raw, (bytes, bytearray)):
-                                raw = raw.decode("utf-8", errors="replace")
-                            if isinstance(raw, str):
-                                raw = raw.strip()
-                                if raw.startswith("{") and raw.endswith("}"):
-                                    body = json.loads(raw)
-                            elif isinstance(raw, dict):
-                                body = raw
-                        except Exception:
-                            body = None
 
-                        if isinstance(body, dict):
-                            if "tables" in body:
-                                df = self.parse_tpex_json_to_dataframe(body, sym, trade_date)
-                                if df is not None and not df.empty:
-                                    collected_dfs.append(df)
-                                    elapsed = time.time() - start_t
-                                    speed = idx / elapsed if elapsed > 0 else 0
-                                    remain = (total - idx) / speed if speed > 0 else 0
-                                    print(f"[{ts_res}]   [上櫃 {idx}/{total}] [OK] {sym} ({len(df)} 筆) | 速度: {speed:.2f} 檔/s | 剩餘約: {remain/60:.1f} 分鐘")
-                                else:
-                                    print(f"[{ts_res}]   [上櫃 {idx}/{total}] [無成交明細/略過] {sym}")
-                                success_for_sym = True
-                                break
-                            elif str(body.get("status")) == "520" or "520" in str(body.get("title", "")):
-                                if attempt < 3:
-                                    time.sleep(2.0 + attempt * 1.5)
-                                    continue
-                                else:
-                                    print(f"[{ts_res}]   [上櫃 {idx}/{total}] [CF 520 阻擋] {sym}")
-                                    break
-                            elif "stat" in body and ("查無" in body["stat"] or "無交易" in body["stat"] or "無符合" in body["stat"]):
-                                print(f"[{ts_res}]   [上櫃 {idx}/{total}] [無成交/略過] {sym}")
-                                success_for_sym = True
-                                break
+                    if isinstance(body, dict):
+                        if "tables" in body:
+                            df = self.parse_tpex_json_to_dataframe(body, sym, trade_date)
+                            if df is not None and not df.empty:
+                                collected_dfs.append(df)
+                                elapsed = time.time() - start_t
+                                speed = idx / elapsed if elapsed > 0 else 0
+                                remain = (total - idx) / speed if speed > 0 else 0
+                                print(f"[{ts_res}]   [上櫃 {idx}/{total}] [OK] {sym} ({len(df)} 筆) | 速度: {speed:.2f} 檔/s | 剩餘約: {remain/60:.1f} 分鐘")
                             else:
-                                stat_msg = body.get("stat") or body.get("message") or str(body)[:60]
-                                if attempt < 3:
-                                    page.get(self.TPEX_URL, retry=2, timeout=20)
-                                    time.sleep(1.8)
-                                    continue
-                                print(f"[{ts_res}]   [上櫃 {idx}/{total}] [非預期回應: {stat_msg}] {sym}")
-                                break
+                                print(f"[{ts_res}]   [上櫃 {idx}/{total}] [無成交明細/略過] {sym}")
+                        elif str(body.get("status")) == "520" or "520" in str(body.get("title", "")):
+                            failed_symbols.append(sym)
+                            print(f"[{ts_res}]   [上櫃 {idx}/{total}] [CF 520 阻擋] {sym}")
+                            # 520 阻擋時強制重啟 Chrome 會話
+                            try: page.quit()
+                            except Exception: pass
+                            page, temp_user_data = self._launch_browser_session(BASE_PORT)
+                            time.sleep(2.0)
+                        elif "stat" in body and ("查無" in body["stat"] or "無交易" in body["stat"] or "無符合" in body["stat"]):
+                            print(f"[{ts_res}]   [上櫃 {idx}/{total}] [無成交/略過] {sym}")
                         else:
-                            if attempt < 3:
+                            failed_symbols.append(sym)
+                            stat_msg = body.get("stat") or body.get("message") or str(body)[:60]
+                            print(f"[{ts_res}]   [上櫃 {idx}/{total}] [非預期回應: {stat_msg}] {sym}")
+                            # 操作逾時或異常時，徹底重啟 Chrome 會話以換發全新 Token
+                            if "操作逾時" in str(stat_msg) or "逾時" in str(stat_msg):
+                                try: page.quit()
+                                except Exception: pass
+                                page, temp_user_data = self._launch_browser_session(BASE_PORT)
+                            else:
                                 page.get(self.TPEX_URL, retry=2, timeout=20)
-                                time.sleep(1.5)
-                                continue
-                            print(f"[{ts_res}]   [上櫃 {idx}/{total}] [解析失敗] {sym}")
-                            break
+                            time.sleep(1.5)
+                    else:
+                        failed_symbols.append(sym)
+                        print(f"[{ts_res}]   [上櫃 {idx}/{total}] [解析失敗] {sym}")
+                        try: page.quit()
+                        except Exception: pass
+                        page, temp_user_data = self._launch_browser_session(BASE_PORT)
+                        time.sleep(1.5)
 
-                    except Exception as e:
-                        if attempt < 3:
-                            time.sleep(1.0)
-                            continue
-                        print(f"[{ts_res}]   [上櫃 {idx}/{total}] [異常] {sym} ({e})")
-                        break
-
-                if not success_for_sym:
+                except Exception as e:
+                    ts_err = get_taipei_now().strftime("%H:%M:%S")
                     failed_symbols.append(sym)
+                    print(f"[{ts_err}]   [上櫃 {idx}/{total}] [異常] {sym} ({e})")
+                finally:
+                    processed_symbols.add(sym)
 
-                processed_symbols.add(sym)
                 sys.stdout.flush()
 
         except Exception as e:
@@ -513,9 +496,9 @@ class TPEXCloudCrawler:
         stock_codes: List[str],
         trade_date: str,
         max_rounds: int = 3,
-        cooldown_sec: int = 8
+        cooldown_sec: int = 10
     ) -> Tuple[List[pd.DataFrame], List[str]]:
-        """雲端多輪自適應安全補抓機制 (針對 CF 520 / 逾時進行最多 3 輪深度補抓)"""
+        """雲端多輪自適應安全補抓機制 (針對 CF 520 / 逾時進行第 2 輪補抓)"""
         all_dfs = []
         pending_symbols = list(stock_codes)
 
