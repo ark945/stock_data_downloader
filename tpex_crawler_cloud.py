@@ -279,17 +279,19 @@ class TPEXCloudCrawler:
             print(f"[!] 解析 TPEX CSV 失敗 ({stock_id}): {e}")
             return None
 
-    def _launch_browser_session(self, port: int = 9333):
+    def _launch_browser_session(self, port: Optional[int] = None):
         import json
+        import random
         from DrissionPage import ChromiumPage, ChromiumOptions
 
         temp_user_data = tempfile.mkdtemp()
+        actual_port = port if port is not None else random.randint(9300, 9850)
 
         if "DISPLAY" not in os.environ and os.name != "nt":
             os.environ["DISPLAY"] = ":99"
 
         co = ChromiumOptions()
-        co.set_local_port(port)
+        co.set_local_port(actual_port)
         if sys.platform.startswith("linux"):
             for bin_p in ["/usr/bin/chromium-browser", "/usr/bin/chromium", "/usr/bin/google-chrome"]:
                 if os.path.exists(bin_p):
@@ -323,7 +325,6 @@ class TPEXCloudCrawler:
         if not stock_codes:
             return [], []
 
-        BASE_PORT = 9333
         collected_dfs = []
         failed_symbols = []
         total = len(stock_codes)
@@ -333,17 +334,11 @@ class TPEXCloudCrawler:
         processed_symbols = set()
         try:
             print(f"[*] 正在啟動 TPEX 雲端單一持久化引擎 (CDP 封包監聽模式，待抓取: {total} 檔)...")
-            page, temp_user_data = self._launch_browser_session(BASE_PORT)
+            page, temp_user_data = self._launch_browser_session()
             start_t = time.time()
 
             for idx, sym in enumerate(stock_codes, 1):
                 try:
-                    # 每 20 檔主動優雅重啟一次 Chrome (清空記憶體與 Session，避免 TPEX ~26 檔 Token 逾時)
-                    if idx > 1 and (idx - 1) % 20 == 0:
-                        try: page.quit()
-                        except Exception: pass
-                        page, temp_user_data = self._launch_browser_session(BASE_PORT)
-
                     cur_url = page.url or ""
                     cur_title = page.title or ""
                     if "brokerBS.html" not in cur_url or "520" in cur_title or "Error" in cur_title or "unknown error" in cur_title:
@@ -406,10 +401,8 @@ class TPEXCloudCrawler:
                     if not pkt:
                         failed_symbols.append(sym)
                         print(f"[{ts_res}]   [上櫃 {idx}/{total}] [封包逾時] {sym}")
-                        # 封包逾時可能為 Session 卡死，主動重啟 Chrome
-                        try: page.quit()
-                        except Exception: pass
-                        page, temp_user_data = self._launch_browser_session(BASE_PORT)
+                        page.get(self.TPEX_URL, retry=2, timeout=20)
+                        time.sleep(1.0)
                         continue
 
                     body = None
@@ -440,32 +433,22 @@ class TPEXCloudCrawler:
                         elif str(body.get("status")) == "520" or "520" in str(body.get("title", "")):
                             failed_symbols.append(sym)
                             print(f"[{ts_res}]   [上櫃 {idx}/{total}] [CF 520 阻擋] {sym}")
-                            # 520 阻擋時強制重啟 Chrome 會話
-                            try: page.quit()
-                            except Exception: pass
-                            page, temp_user_data = self._launch_browser_session(BASE_PORT)
-                            time.sleep(2.0)
+                            page.get(self.TPEX_URL, retry=2, timeout=20)
+                            time.sleep(1.5)
                         elif "stat" in body and ("查無" in body["stat"] or "無交易" in body["stat"] or "無符合" in body["stat"]):
                             print(f"[{ts_res}]   [上櫃 {idx}/{total}] [無成交/略過] {sym}")
                         else:
                             failed_symbols.append(sym)
                             stat_msg = body.get("stat") or body.get("message") or str(body)[:60]
                             print(f"[{ts_res}]   [上櫃 {idx}/{total}] [非預期回應: {stat_msg}] {sym}")
-                            # 操作逾時或異常時，徹底重啟 Chrome 會話以換發全新 Token
-                            if "操作逾時" in str(stat_msg) or "逾時" in str(stat_msg):
-                                try: page.quit()
-                                except Exception: pass
-                                page, temp_user_data = self._launch_browser_session(BASE_PORT)
-                            else:
-                                page.get(self.TPEX_URL, retry=2, timeout=20)
-                            time.sleep(1.5)
+                            # 同步安全刷新頁面，絕不銷毀 Chrome 打斷連線
+                            page.get(self.TPEX_URL, retry=2, timeout=20)
+                            time.sleep(1.2)
                     else:
                         failed_symbols.append(sym)
                         print(f"[{ts_res}]   [上櫃 {idx}/{total}] [解析失敗] {sym}")
-                        try: page.quit()
-                        except Exception: pass
-                        page, temp_user_data = self._launch_browser_session(BASE_PORT)
-                        time.sleep(1.5)
+                        page.get(self.TPEX_URL, retry=2, timeout=20)
+                        time.sleep(1.2)
 
                 except Exception as e:
                     ts_err = get_taipei_now().strftime("%H:%M:%S")
