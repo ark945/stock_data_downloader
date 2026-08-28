@@ -356,30 +356,40 @@ class TPEXCloudCrawler:
                             page.get(self.TPEX_URL, retry=3, timeout=25)
                             time.sleep(2.0)
 
-                        # 1. 確保在目標頁面並輸入代碼
+                        # 1. 確保在目標頁面、清空已消費之舊 Token、輸入股票代碼並重置 Turnstile
                         if "brokerBS.html" not in (page.url or "") or "search.html" in (page.url or ""):
                             page.get(self.TPEX_URL, retry=2, timeout=20)
                             time.sleep(1.5)
 
                         page.run_js(f"""
+                            // 清空上一檔已消費之舊 Token (避免被後端判定為重複/過期 Token)
+                            const cfInp = document.querySelector('[name=cf-turnstile-response]');
+                            if (cfInp) cfInp.value = '';
+
                             const inp = document.querySelector('input.code') || document.querySelector('[name=code]');
                             if (inp) {{
                                 inp.value = '{sym}';
                                 inp.dispatchEvent(new Event('input', {{ bubbles: true }}));
                                 inp.dispatchEvent(new Event('change', {{ bubbles: true }}));
                             }}
+
+                            // 呼叫 Cloudflare 官方 API 換發全新合法 Token
+                            if (window.turnstile && typeof window.turnstile.reset === 'function') {{
+                                try {{ window.turnstile.reset(); }} catch(e) {{}}
+                            }}
                         """)
 
-                        # 2. 等待 Cloudflare Turnstile 驗證 Token 就緒
+                        # 2. 等待 Cloudflare Turnstile 換發出全新的有效 Token (必須 > 20 字元)
                         token_ready = False
-                        for _ in range(25):
-                            time.sleep(0.1)
+                        for _ in range(35):
+                            time.sleep(0.12)
                             tok = page.run_js("return document.querySelector('[name=cf-turnstile-response]') ? document.querySelector('[name=cf-turnstile-response]').value : '';")
                             if tok and len(tok) > 20:
                                 token_ready = True
                                 break
 
                         if not token_ready:
+                            # 若 reset 沒出 Token，原地刷新整頁重新獲取
                             page.get(self.TPEX_URL, retry=2, timeout=20)
                             time.sleep(1.5)
                             page.run_js(f"""
@@ -390,8 +400,8 @@ class TPEXCloudCrawler:
                                     inp.dispatchEvent(new Event('change', {{ bubbles: true }}));
                                 }}
                             """)
-                            for _ in range(30):
-                                time.sleep(0.1)
+                            for _ in range(35):
+                                time.sleep(0.12)
                                 tok = page.run_js("return document.querySelector('[name=cf-turnstile-response]') ? document.querySelector('[name=cf-turnstile-response]').value : '';")
                                 if tok and len(tok) > 20:
                                     token_ready = True
