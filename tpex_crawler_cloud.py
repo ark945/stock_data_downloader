@@ -342,11 +342,11 @@ class TPEXCloudCrawler:
                 success_for_sym = False
                 ts_res = get_taipei_now().strftime("%H:%M:%S")
 
-                # 每 20 檔主動優雅重啟一次 Chrome (清空記憶體與 Session)
-                if idx > 1 and (idx - 1) % 20 == 0:
+                # 每 12 檔主動優雅重啟一次 Chrome (清空記憶體與 Session，永遠走在 Token 壽命前面)
+                if idx > 1 and (idx - 1) % 12 == 0:
                     try: page.quit()
                     except Exception: pass
-                    page, temp_user_data = self._launch_browser_session(BASE_PORT)
+                    page, temp_user_data = self._launch_browser_session()
 
                 for attempt in range(1, 4):
                     try:
@@ -370,7 +370,7 @@ class TPEXCloudCrawler:
                             }}
                         """)
 
-                        # 2. 等待 Cloudflare Turnstile 驗證 Token 就緒 (給予 5 秒充足時間，海外 IP 必備)
+                        # 2. 等待 Cloudflare Turnstile 驗證 Token 就緒 (給予 5 秒充足時間)
                         token_ready = False
                         for _ in range(40):
                             time.sleep(0.12)
@@ -380,9 +380,10 @@ class TPEXCloudCrawler:
                                 break
 
                         if not token_ready:
-                            # 若逾時未出 Token，刷新頁面並重新等待
-                            page.get(self.TPEX_URL, retry=2, timeout=20)
-                            time.sleep(2.0)
+                            # 若無 Token 直接重啟 Chrome 會話以徹底換新
+                            try: page.quit()
+                            except Exception: pass
+                            page, temp_user_data = self._launch_browser_session()
                             page.run_js(f"""
                                 const inp = document.querySelector('input.code') || document.querySelector('[name=code]');
                                 if (inp) {{
@@ -398,7 +399,7 @@ class TPEXCloudCrawler:
                                     token_ready = True
                                     break
 
-                        # 3. 清空監聽佇列並點擊查詢按鈕 (100% 精準觸發 formblock 內部)
+                        # 3. 清空監聽佇列並點擊查詢按鈕
                         page.listen.clear()
                         page.run_js("""
                             const btn = document.querySelector('div.formblock button[type="submit"]') || 
@@ -411,8 +412,11 @@ class TPEXCloudCrawler:
                         ts_res = get_taipei_now().strftime("%H:%M:%S")
 
                         if not pkt:
+                            # 封包逾時立即重啟 Chrome 換發全新 Session
+                            try: page.quit()
+                            except Exception: pass
+                            page, temp_user_data = self._launch_browser_session()
                             if attempt < 3:
-                                time.sleep(1.0)
                                 continue
                             print(f"[{ts_res}]   [上櫃 {idx}/{total}] [封包逾時] {sym}")
                             break
@@ -445,12 +449,11 @@ class TPEXCloudCrawler:
                                 success_for_sym = True
                                 break
                             elif str(body.get("status")) == "520" or "520" in str(body.get("title", "")):
+                                # 遇 520 阻擋立即重啟 Chrome
+                                try: page.quit()
+                                except Exception: pass
+                                page, temp_user_data = self._launch_browser_session()
                                 if attempt < 3:
-                                    # 遇 520 阻擋立即重啟 Chrome 並重試本檔
-                                    try: page.quit()
-                                    except Exception: pass
-                                    page, temp_user_data = self._launch_browser_session(BASE_PORT)
-                                    time.sleep(2.0)
                                     continue
                                 else:
                                     print(f"[{ts_res}]   [上櫃 {idx}/{total}] [CF 520 阻擋] {sym}")
@@ -462,36 +465,37 @@ class TPEXCloudCrawler:
                             else:
                                 stat_msg = body.get("stat") or body.get("message") or str(body)[:60]
                                 if "操作逾時" in str(stat_msg) or "逾時" in str(stat_msg):
+                                    # 關鍵修復：操作逾時代表整個 Chrome 實例 Session 已被 TPEX 標記過期，必須重啟全新 Chrome！
+                                    try: page.quit()
+                                    except Exception: pass
+                                    page, temp_user_data = self._launch_browser_session()
                                     if attempt < 3:
-                                        # 操作逾時代表 Token 失效，刷新頁面重獲 Token 重試本檔
-                                        page.get(self.TPEX_URL, retry=2, timeout=20)
-                                        time.sleep(2.0)
                                         continue
                                     else:
                                         print(f"[{ts_res}]   [上櫃 {idx}/{total}] [非預期回應: {stat_msg}] {sym}")
-                                        # 3 次均失敗才重啟 Chrome 供下一檔使用
-                                        try: page.quit()
-                                        except Exception: pass
-                                        page, temp_user_data = self._launch_browser_session(BASE_PORT)
                                         break
                                 else:
+                                    try: page.quit()
+                                    except Exception: pass
+                                    page, temp_user_data = self._launch_browser_session()
                                     if attempt < 3:
-                                        page.get(self.TPEX_URL, retry=2, timeout=20)
-                                        time.sleep(1.5)
                                         continue
                                     print(f"[{ts_res}]   [上櫃 {idx}/{total}] [非預期回應: {stat_msg}] {sym}")
                                     break
                         else:
+                            try: page.quit()
+                            except Exception: pass
+                            page, temp_user_data = self._launch_browser_session()
                             if attempt < 3:
-                                page.get(self.TPEX_URL, retry=2, timeout=20)
-                                time.sleep(1.5)
                                 continue
                             print(f"[{ts_res}]   [上櫃 {idx}/{total}] [解析失敗] {sym}")
                             break
 
                     except Exception as e:
+                        try: page.quit()
+                        except Exception: pass
+                        page, temp_user_data = self._launch_browser_session()
                         if attempt < 3:
-                            time.sleep(1.0)
                             continue
                         print(f"[{ts_res}]   [上櫃 {idx}/{total}] [異常] {sym} ({e})")
                         break
