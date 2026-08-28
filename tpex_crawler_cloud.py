@@ -451,12 +451,18 @@ class TPEXCloudCrawler:
                             failed_symbols.append(sym)
                             stat_msg = body.get("stat") or body.get("message") or str(body)[:60]
                             print(f"[{ts_res}]   [上櫃 {idx}/{total}] [非預期回應: {stat_msg}] {sym}")
-                            # 遵照官方指示：操作逾時直接原地重新整理頁面 (F5 Refresh)，秒級重獲全新 Token！
+                            # 遵照官方指示：操作逾時直接原地重新整理頁面 (F5 Refresh)，並主動等 CF Token 就緒！
                             try:
                                 page.refresh()
                             except Exception:
                                 page.get(self.TPEX_URL, retry=2, timeout=20)
-                            time.sleep(1.5)
+                            # 精確等待 CF Turnstile 重新簽發有效 Token (> 20 字元)
+                            for _ in range(30):
+                                time.sleep(0.1)
+                                tok = page.run_js("return document.querySelector('[name=cf-turnstile-response]') ? document.querySelector('[name=cf-turnstile-response]').value : '';")
+                                if tok and len(tok) > 20:
+                                    break
+                            time.sleep(0.5)
                     else:
                         failed_symbols.append(sym)
                         print(f"[{ts_res}]   [上櫃 {idx}/{total}] [解析失敗] {sym}")
@@ -464,7 +470,13 @@ class TPEXCloudCrawler:
                             page.refresh()
                         except Exception:
                             page.get(self.TPEX_URL, retry=2, timeout=20)
-                        time.sleep(1.5)
+                        # 精確等待 CF Turnstile 重新簽發有效 Token (> 20 字元)
+                        for _ in range(30):
+                            time.sleep(0.1)
+                            tok = page.run_js("return document.querySelector('[name=cf-turnstile-response]') ? document.querySelector('[name=cf-turnstile-response]').value : '';")
+                            if tok and len(tok) > 20:
+                                break
+                        time.sleep(0.5)
 
                 except Exception as e:
                     ts_err = get_taipei_now().strftime("%H:%M:%S")
