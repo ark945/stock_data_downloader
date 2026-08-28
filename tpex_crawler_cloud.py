@@ -338,8 +338,8 @@ class TPEXCloudCrawler:
 
             for idx, sym in enumerate(stock_codes, 1):
                 try:
-                    # 每 80 檔主動優雅重啟一次 Chrome (清空記憶體，確保海外 Runner 零崩潰)
-                    if idx > 1 and (idx - 1) % 80 == 0:
+                    # 每 20 檔主動優雅重啟一次 Chrome (清空記憶體與 Session，避免 TPEX ~26 檔 Token 逾時)
+                    if idx > 1 and (idx - 1) % 20 == 0:
                         try: page.quit()
                         except Exception: pass
                         page, temp_user_data = self._launch_browser_session(BASE_PORT)
@@ -406,6 +406,10 @@ class TPEXCloudCrawler:
                     if not pkt:
                         failed_symbols.append(sym)
                         print(f"[{ts_res}]   [上櫃 {idx}/{total}] [封包逾時] {sym}")
+                        # 封包逾時可能為 Session 卡死，主動重啟 Chrome
+                        try: page.quit()
+                        except Exception: pass
+                        page, temp_user_data = self._launch_browser_session(BASE_PORT)
                         continue
 
                     body = None
@@ -436,6 +440,10 @@ class TPEXCloudCrawler:
                         elif str(body.get("status")) == "520" or "520" in str(body.get("title", "")):
                             failed_symbols.append(sym)
                             print(f"[{ts_res}]   [上櫃 {idx}/{total}] [CF 520 阻擋] {sym}")
+                            # 520 阻擋時強制重啟 Chrome 會話
+                            try: page.quit()
+                            except Exception: pass
+                            page, temp_user_data = self._launch_browser_session(BASE_PORT)
                             time.sleep(2.0)
                         elif "stat" in body and ("查無" in body["stat"] or "無交易" in body["stat"] or "無符合" in body["stat"]):
                             print(f"[{ts_res}]   [上櫃 {idx}/{total}] [無成交/略過] {sym}")
@@ -443,13 +451,20 @@ class TPEXCloudCrawler:
                             failed_symbols.append(sym)
                             stat_msg = body.get("stat") or body.get("message") or str(body)[:60]
                             print(f"[{ts_res}]   [上櫃 {idx}/{total}] [非預期回應: {stat_msg}] {sym}")
-                            # 觸發頁面刷新重建 Token 狀態
-                            page.get(self.TPEX_URL, retry=2, timeout=20)
-                            time.sleep(2.0)
+                            # 操作逾時或異常時，徹底重啟 Chrome 會話以換發全新 Token
+                            if "操作逾時" in str(stat_msg) or "逾時" in str(stat_msg):
+                                try: page.quit()
+                                except Exception: pass
+                                page, temp_user_data = self._launch_browser_session(BASE_PORT)
+                            else:
+                                page.get(self.TPEX_URL, retry=2, timeout=20)
+                            time.sleep(1.5)
                     else:
                         failed_symbols.append(sym)
                         print(f"[{ts_res}]   [上櫃 {idx}/{total}] [解析失敗] {sym}")
-                        page.get(self.TPEX_URL, retry=2, timeout=20)
+                        try: page.quit()
+                        except Exception: pass
+                        page, temp_user_data = self._launch_browser_session(BASE_PORT)
                         time.sleep(1.5)
 
                 except Exception as e:
