@@ -451,32 +451,21 @@ class TPEXCloudCrawler:
                             failed_symbols.append(sym)
                             stat_msg = body.get("stat") or body.get("message") or str(body)[:60]
                             print(f"[{ts_res}]   [上櫃 {idx}/{total}] [非預期回應: {stat_msg}] {sym}")
-                            # 遵照官方指示：操作逾時直接原地重新整理頁面 (F5 Refresh)，並主動等 CF Token 就緒！
-                            try:
-                                page.refresh()
-                            except Exception:
+                            # 操作逾時或異常時，徹底重啟 Chrome 會話以換發全新 Token
+                            if "操作逾時" in str(stat_msg) or "逾時" in str(stat_msg):
+                                try: page.quit()
+                                except Exception: pass
+                                page, temp_user_data = self._launch_browser_session(BASE_PORT)
+                            else:
                                 page.get(self.TPEX_URL, retry=2, timeout=20)
-                            # 精確等待 CF Turnstile 重新簽發有效 Token (> 20 字元)
-                            for _ in range(30):
-                                time.sleep(0.1)
-                                tok = page.run_js("return document.querySelector('[name=cf-turnstile-response]') ? document.querySelector('[name=cf-turnstile-response]').value : '';")
-                                if tok and len(tok) > 20:
-                                    break
-                            time.sleep(0.5)
+                            time.sleep(1.5)
                     else:
                         failed_symbols.append(sym)
                         print(f"[{ts_res}]   [上櫃 {idx}/{total}] [解析失敗] {sym}")
-                        try:
-                            page.refresh()
-                        except Exception:
-                            page.get(self.TPEX_URL, retry=2, timeout=20)
-                        # 精確等待 CF Turnstile 重新簽發有效 Token (> 20 字元)
-                        for _ in range(30):
-                            time.sleep(0.1)
-                            tok = page.run_js("return document.querySelector('[name=cf-turnstile-response]') ? document.querySelector('[name=cf-turnstile-response]').value : '';")
-                            if tok and len(tok) > 20:
-                                break
-                        time.sleep(0.5)
+                        try: page.quit()
+                        except Exception: pass
+                        page, temp_user_data = self._launch_browser_session(BASE_PORT)
+                        time.sleep(1.5)
 
                 except Exception as e:
                     ts_err = get_taipei_now().strftime("%H:%M:%S")
@@ -506,7 +495,7 @@ class TPEXCloudCrawler:
         self,
         stock_codes: List[str],
         trade_date: str,
-        max_rounds: int = 3,
+        max_rounds: int = 2,
         cooldown_sec: int = 10
     ) -> Tuple[List[pd.DataFrame], List[str]]:
         """雲端多輪自適應安全補抓機制 (針對 CF 520 / 逾時進行第 2 輪補抓)"""
