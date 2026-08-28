@@ -392,7 +392,8 @@ def run_crawler_menu():
                 sys.executable, "stock_crawler_coordinator.py",
                 "--market", "all",
                 "--twse-workers", str(twse_w),
-                "--tpex-workers", str(tpex_w)
+                "--tpex-workers", str(tpex_w),
+                "--max-rounds", "6"
             ])
         elif c == "2":
             subprocess.run([
@@ -400,19 +401,22 @@ def run_crawler_menu():
                 "--market", "all",
                 "--twse-workers", str(twse_w),
                 "--tpex-workers", str(tpex_w),
+                "--max-rounds", "6",
                 "--no-excel"
             ])
         elif c == "3":
             subprocess.run([
                 sys.executable, "stock_crawler_coordinator.py",
                 "--market", "twse",
-                "--twse-workers", str(twse_w)
+                "--twse-workers", str(twse_w),
+                "--max-rounds", "6"
             ])
         elif c == "4":
             subprocess.run([
                 sys.executable, "stock_crawler_coordinator.py",
                 "--market", "tpex",
-                "--tpex-workers", str(tpex_w)
+                "--tpex-workers", str(tpex_w),
+                "--max-rounds", "6"
             ])
         elif c == "5":
             date_str = input("\n請輸入指定日期 (YYYY-MM-DD) > ").strip()
@@ -422,7 +426,8 @@ def run_crawler_menu():
                     "--date", date_str,
                     "--market", "all",
                     "--twse-workers", str(twse_w),
-                    "--tpex-workers", str(tpex_w)
+                    "--tpex-workers", str(tpex_w),
+                    "--max-rounds", "6"
                 ])
 
 

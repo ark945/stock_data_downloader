@@ -339,7 +339,7 @@ def main():
         default=None,
         help="TPEX 上櫃專用併發線程數 (預設: 1，CDP 瀏覽器模式建議 1~2 最穩定)",
     )
-    parser.add_argument("--max-rounds", type=int, default=5, help="上市最大安全補抓輪數 (預設 5 輪)")
+    parser.add_argument("--max-rounds", type=int, default=6, help="上市最大安全補抓輪數 (預設 6 輪)")
     parser.add_argument("--no-excel", action="store_true", help="略過產出 Excel 檔")
     parser.add_argument("--output-dir", type=str, default=None, help="指定輸出目錄")
     parser.add_argument("--email", type=str, default=None, help="指定接收短缺日報的收件 Email")
