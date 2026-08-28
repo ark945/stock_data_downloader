@@ -133,6 +133,10 @@ def save_env_file(env_data: dict):
 # 更新時間: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
 # ==========================================
 
+# 併發線程設定 (上市純 HTTP 推薦 8~12；上櫃 CDP 瀏覽器推薦 1~2 最穩定)
+TWSE_WORKERS={env_data.get('TWSE_WORKERS', '8')}
+TPEX_WORKERS={env_data.get('TPEX_WORKERS', '1')}
+
 # Google Drive 雲端同步
 GDRIVE_UPLOAD_URL={env_data.get('GDRIVE_UPLOAD_URL', '')}
 GDRIVE_FOLDER_ID={env_data.get('GDRIVE_FOLDER_ID', '')}
@@ -159,6 +163,8 @@ def interactive_setup_env():
 
     if current_env:
         print("📋 目前已存在的設定摘要：")
+        twse_w = current_env.get("TWSE_WORKERS", "8")
+        tpex_w = current_env.get("TPEX_WORKERS", "1")
         gas = current_env.get("GDRIVE_UPLOAD_URL", "")
         fld = current_env.get("GDRIVE_FOLDER_ID", "")
         tg_t = current_env.get("TELEGRAM_BOT_TOKEN", "")
@@ -167,6 +173,7 @@ def interactive_setup_env():
         smtp_p = "***" if current_env.get("SMTP_PASSWORD") else ""
         rcv = current_env.get("RECEIVER_EMAIL", "")
 
+        print(f"  ⚡ 採集線程     : 上市 (TWSE): {twse_w} Workers | 上櫃 (TPEX): {tpex_w} Workers")
         print(f"  ☁️ Google Drive : {'已設定 URL' if gas else '未設定'} | 資料夾 ID: {fld or '未設定'}")
         print(f"  📱 Telegram     : Token: {tg_t[:8]+'...' if tg_t else '未設定'} | Chat ID: {tg_c or '未設定'}")
         print(f"  📧 SMTP Email   : 寄件: {smtp_u or '未設定'} | 密碼: {smtp_p} | 收件: {rcv or '未設定'}")
@@ -175,25 +182,31 @@ def interactive_setup_env():
         print("請選擇操作：")
         print("  0. 🚀 【全部略過 (Bypass)】維持目前設定，直接返回主選單")
         print("  1. ✏️ 重新完整設定所有項目 (依序填寫)")
-        print("  2. ☁️ 僅修改 Google Drive 設定")
-        print("  3. 📱 僅修改 Telegram 設定")
-        print("  4. 📧 僅修改 Gmail SMTP 設定")
+        print("  2. ⚡ 僅修改雙市場線程設定 (TWSE / TPEX)")
+        print("  3. ☁️ 僅修改 Google Drive 設定")
+        print("  4. 📱 僅修改 Telegram 設定")
+        print("  5. 📧 僅修改 Gmail SMTP 設定")
 
-        sub_c = input("\n請選擇 (0-4，預設 0 跳過) > ").strip()
+        sub_c = input("\n請選擇 (0-5，預設 0 跳過) > ").strip()
         if not sub_c or sub_c == "0":
             print("\n[✓] 已跳過 (Bypass)，維持既有設定！")
             return
         elif sub_c == "2":
+            _setup_workers_part(current_env)
+            save_env_file(current_env)
+            print("\n🎉 [成功] 雙市場線程設定已更新！")
+            return
+        elif sub_c == "3":
             _setup_gdrive_part(current_env)
             save_env_file(current_env)
             print("\n🎉 [成功] Google Drive 設定已更新！")
             return
-        elif sub_c == "3":
+        elif sub_c == "4":
             _setup_telegram_part(current_env)
             save_env_file(current_env)
             print("\n🎉 [成功] Telegram 設定已更新！")
             return
-        elif sub_c == "4":
+        elif sub_c == "5":
             _setup_email_part(current_env)
             save_env_file(current_env)
             print("\n🎉 [成功] Email 設定已更新！")
@@ -201,6 +214,7 @@ def interactive_setup_env():
 
     # 完整循序設定
     print("\n👉 請依序填寫參數（按 Enter 保留原值 / 輸入 clear 清空）：\n")
+    _setup_workers_part(current_env)
     _setup_gdrive_part(current_env)
     _setup_telegram_part(current_env)
     _setup_email_part(current_env)
@@ -209,6 +223,30 @@ def interactive_setup_env():
     print("\n" + "=" * 65)
     print(f"🎉 [成功] 已成功儲存設定檔: {ENV_PATH}")
     print("=" * 65)
+
+
+def _setup_workers_part(env_data: dict):
+    print("⚡ --- [雙市場採集線程 (Workers) 設定] ---")
+    twse_def = env_data.get("TWSE_WORKERS", "8")
+    tpex_def = env_data.get("TPEX_WORKERS", "1")
+
+    print("👉 上市 (TWSE) 併發線程數 (純 HTTP 高速請求，推薦 8 ~ 12)：")
+    if twse_def:
+        print(f"   [目前: {twse_def}]")
+    val_twse = input("TWSE_WORKERS (按 Enter 預設 8) > ").strip()
+    if val_twse.isdigit() and int(val_twse) >= 1:
+        env_data["TWSE_WORKERS"] = val_twse
+    elif not env_data.get("TWSE_WORKERS"):
+        env_data["TWSE_WORKERS"] = "8"
+
+    print("👉 上櫃 (TPEX) 併發線程數 (CDP 瀏覽器模式，推薦 1 ~ 2 最穩定零崩潰)：")
+    if tpex_def:
+        print(f"   [目前: {tpex_def}]")
+    val_tpex = input("TPEX_WORKERS (按 Enter 預設 1) > ").strip()
+    if val_tpex.isdigit() and int(val_tpex) >= 1:
+        env_data["TPEX_WORKERS"] = val_tpex
+    elif not env_data.get("TPEX_WORKERS"):
+        env_data["TPEX_WORKERS"] = "1"
 
 
 def _setup_gdrive_part(env_data: dict):
@@ -305,24 +343,33 @@ def run_quick_test():
         subprocess.run([sys.executable, "-c", "from tpex_bsr_crawler import TPEXBrokerCrawler; c = TPEXBrokerCrawler(); df, f = c.crawl_stocks_with_retry(['6488'], '2026-08-21'); print('抓取結果:', len(df), '筆')"])
 
 
-def get_workers_selection(default_workers: int = 4) -> int:
-    """選擇運行線程與速度模式"""
-    print("\n⚡ 選擇採集速度與線程模式：")
-    print(f"  1. 🛡️ 【安全穩健模式】4 Workers (極低負擔、零封鎖風險，約 20~25 分鐘) [推薦 ⭐]")
-    print(f"  2. 🚀 【極速衝刺模式】6 Workers (多進程極速並行，約 15 分鐘)")
-    print(f"  3. 🛠️ 【自訂 Workers】手動輸入線程數 (1 ~ 8)")
-    print(f"  (按 Enter 直接套用預設: {default_workers} Workers)")
+def get_workers_selection() -> tuple[int, int]:
+    """選擇運行線程與速度模式 (上市與上櫃獨立設定)"""
+    cur_env = read_current_env()
+    def_twse = int(cur_env.get("TWSE_WORKERS", 8))
+    def_tpex = int(cur_env.get("TPEX_WORKERS", 1))
 
-    w_choice = input(f"請選擇速度模式 (1-3，預設 1) > ").strip()
+    print("\n⚡ 選擇雙市場採集速度與線程模式：")
+    print(f"  1. 🛡️ 【智能黃金配置 (推薦 ⭐)】上市 8 線程 (HTTP極速) + 上櫃 1 線程 (單瀏覽器 100% 穩健零崩潰)")
+    print(f"  2. 🚀 【極速衝刺模式】上市 12 線程 + 上櫃 2 線程 (需高階 CPU)")
+    print(f"  3. 🐢 【極低負擔省電模式】上市 4 線程 + 上櫃 1 線程")
+    print(f"  4. 🛠️ 【進階自訂】手動分別指定 TWSE 與 TPEX 線程數")
+    print(f"  (按 Enter 直接套用目前設定: 上市 {def_twse} / 上櫃 {def_tpex} Workers)")
+
+    w_choice = input(f"\n請選擇速度模式 (1-4，按 Enter 預設 1) > ").strip()
     if w_choice == "2":
-        return 6
+        return 12, 2
     elif w_choice == "3":
-        custom_w = input("請輸入自訂 Workers 數量 (1-8) > ").strip()
-        if custom_w.isdigit() and 1 <= int(custom_w) <= 8:
-            return int(custom_w)
-        print(f"[!] 輸入無效，自動採用安全模式 4 Workers")
-        return 4
-    return 4
+        return 4, 1
+    elif w_choice == "4":
+        w_twse_in = input(f"請輸入上市 (TWSE) 線程數 (1~16，目前: {def_twse}) > ").strip()
+        w_tpex_in = input(f"請輸入上櫃 (TPEX) 線程數 (1~4，目前: {def_tpex}) > ").strip()
+        twse_val = int(w_twse_in) if w_twse_in.isdigit() and 1 <= int(w_twse_in) <= 16 else def_twse
+        tpex_val = int(w_tpex_in) if w_tpex_in.isdigit() and 1 <= int(w_tpex_in) <= 4 else def_tpex
+        return twse_val, tpex_val
+    elif w_choice == "1" or not w_choice:
+        return def_twse, def_tpex
+    return def_twse, def_tpex
 
 
 def run_crawler_menu():
@@ -337,22 +384,46 @@ def run_crawler_menu():
 
     c = input("\n請輸入選項 (0-5) > ").strip()
     if c in ["1", "2", "3", "4", "5"]:
-        # 取得使用者期望的線程模式
-        workers = get_workers_selection(default_workers=4)
+        # 取得雙市場獨立線程配置
+        twse_w, tpex_w = get_workers_selection()
 
         if c == "1":
-            subprocess.run([sys.executable, "stock_crawler_coordinator.py", "--market", "all", "--workers", str(workers)])
+            subprocess.run([
+                sys.executable, "stock_crawler_coordinator.py",
+                "--market", "all",
+                "--twse-workers", str(twse_w),
+                "--tpex-workers", str(tpex_w)
+            ])
         elif c == "2":
-            subprocess.run([sys.executable, "stock_crawler_coordinator.py", "--market", "all", "--workers", str(workers), "--no-excel"])
+            subprocess.run([
+                sys.executable, "stock_crawler_coordinator.py",
+                "--market", "all",
+                "--twse-workers", str(twse_w),
+                "--tpex-workers", str(tpex_w),
+                "--no-excel"
+            ])
         elif c == "3":
-            twse_w = min(workers + 2, 8)  # 上市純 HTTP 請求可額外微增線程
-            subprocess.run([sys.executable, "stock_crawler_coordinator.py", "--market", "twse", "--workers", str(twse_w)])
+            subprocess.run([
+                sys.executable, "stock_crawler_coordinator.py",
+                "--market", "twse",
+                "--twse-workers", str(twse_w)
+            ])
         elif c == "4":
-            subprocess.run([sys.executable, "stock_crawler_coordinator.py", "--market", "tpex", "--workers", str(workers)])
+            subprocess.run([
+                sys.executable, "stock_crawler_coordinator.py",
+                "--market", "tpex",
+                "--tpex-workers", str(tpex_w)
+            ])
         elif c == "5":
             date_str = input("\n請輸入指定日期 (YYYY-MM-DD) > ").strip()
             if date_str:
-                subprocess.run([sys.executable, "stock_crawler_coordinator.py", "--date", date_str, "--market", "all", "--workers", str(workers)])
+                subprocess.run([
+                    sys.executable, "stock_crawler_coordinator.py",
+                    "--date", date_str,
+                    "--market", "all",
+                    "--twse-workers", str(twse_w),
+                    "--tpex-workers", str(tpex_w)
+                ])
 
 
 def clear_cache_menu():

@@ -125,7 +125,9 @@ def get_latest_trading_date() -> str:
 def run_full_market_crawler(
     trade_date: Optional[str] = None,
     markets: str = "all",
-    workers: int = 4,
+    workers: int = 8,
+    twse_workers: Optional[int] = None,
+    tpex_workers: Optional[int] = None,
     max_rounds: int = 6,
     output_dir: str = None,
     export_excel: bool = True,
@@ -143,6 +145,12 @@ def run_full_market_crawler(
     os.makedirs(output_dir, exist_ok=True)
     name_map = load_stock_name_map()
 
+    # 決定 TWSE 與 TPEX 各自獨立的線程數
+    actual_twse_w = twse_workers if twse_workers is not None else int(os.environ.get("TWSE_WORKERS", workers or 8))
+    actual_tpex_w = tpex_workers if tpex_workers is not None else int(os.environ.get("TPEX_WORKERS", 1 if num_shards > 1 else min(workers, 2)))
+    if num_shards > 1:
+        actual_tpex_w = 1  # 雲端分片模式固定單 Worker 避免衝突
+
     market_suffix = f"_{markets.lower()}" if markets.lower() in ["twse", "tpex"] else ""
     expected_final_name = f"api_absr1_{trade_date}_{trade_date}{market_suffix}.parquet"
 
@@ -153,7 +161,8 @@ def run_full_market_crawler(
     log_msg(f"[*] 目標市場範疇 (Market): {markets.upper()} (產檔規格: {expected_final_name})")
     if num_shards > 1:
         log_msg(f"[*] 雲端分片模式: 節點 {shard_id + 1} / {num_shards} (Shard ID: {shard_id})")
-    log_msg(f"[*] TWSE 線程數: {workers} Workers | 上市最大補抓: {max_rounds} 輪")
+    log_msg(f"[*] 併發配置: TWSE 上市 {actual_twse_w} Workers (純HTTP高速) | TPEX 上櫃 {actual_tpex_w} Workers (CDP瀏覽器穩健)")
+    log_msg(f"[*] 上市最大補抓輪數: {max_rounds} 輪")
     log_msg(f"[*] 成果輸出路徑: {output_dir}")
     print("==================================================")
     sys.stdout.flush()
@@ -166,18 +175,18 @@ def run_full_market_crawler(
 
     # 1. 抓取上市 (TWSE)
     if markets in ["all", "twse"]:
-        log_msg(">>> [階段 1/2] 啟動 TWSE 上市股票分點抓取 (最多 6 輪安全補抓)...")
+        log_msg(f">>> [階段 1/2] 啟動 TWSE 上市股票分點抓取 ({actual_twse_w} Workers, 最多 6 輪安全補抓)...")
         twse_symbols = get_active_listed_symbols()
         if num_shards > 1:
             twse_symbols = [s for i, s in enumerate(twse_symbols) if i % num_shards == shard_id]
         total_target_count += len(twse_symbols)
         log_msg(f"[*] 取得上市標的清單: {len(twse_symbols)} 檔 (分片 {shard_id + 1}/{num_shards})")
         
-        twse_crawler = TWSEBrokerCrawler(delay_sec=0.4, max_retries=6)
+        twse_crawler = TWSEBrokerCrawler(delay_sec=0.3, max_retries=6)
         twse_dfs, twse_failed, r_exec = twse_crawler.crawl_stocks(
             symbols=twse_symbols,
             trade_date=trade_date,
-            max_workers=workers,
+            max_workers=actual_twse_w,
             max_retry_rounds=max_rounds
         )
         collected_dfs.extend(twse_dfs)
@@ -194,7 +203,7 @@ def run_full_market_crawler(
 
     # 2. 抓取上櫃 (TPEX)
     if markets in ["all", "tpex"]:
-        log_msg(">>> [階段 2/2] 啟動 TPEX 上櫃股票分點抓取 (單一純淨持久加速模式)...")
+        log_msg(f">>> [階段 2/2] 啟動 TPEX 上櫃股票分點抓取 ({actual_tpex_w} Workers 瀏覽器防護模式)...")
         tpex_symbols = TPEXBrokerCrawler.get_all_tpex_symbols()
         if num_shards > 1:
             tpex_symbols = [s for i, s in enumerate(tpex_symbols) if i % num_shards == shard_id]
@@ -202,13 +211,11 @@ def run_full_market_crawler(
         log_msg(f"[*] 取得上櫃標的清單: {len(tpex_symbols)} 檔 (分片 {shard_id + 1}/{num_shards})")
         
         tpex_crawler = TPEXBrokerCrawler()
-        # 本地端 (單機模式) 啟用多 Worker 並行；雲端分片模式保持單 Worker
-        tpex_workers = min(workers, 6) if num_shards == 1 else 1
         tpex_dfs, tpex_failed = tpex_crawler.crawl_stocks_with_retry(
             stock_codes=tpex_symbols,
             trade_date=trade_date,
             max_rounds=2,
-            workers=tpex_workers
+            workers=actual_tpex_w
         )
         collected_dfs.extend(tpex_dfs)
         
@@ -318,7 +325,19 @@ def main():
         "--workers",
         type=int,
         default=8,
-        help="TWSE 併發下載線程數 (預設: 8，兼顧極速與防封鎖)",
+        help="預設通用線程數 (預設: 8)",
+    )
+    parser.add_argument(
+        "--twse-workers",
+        type=int,
+        default=None,
+        help="TWSE 上市專用併發線程數 (預設: 8，純 HTTP 高速請求可開 8~12)",
+    )
+    parser.add_argument(
+        "--tpex-workers",
+        type=int,
+        default=None,
+        help="TPEX 上櫃專用併發線程數 (預設: 1，CDP 瀏覽器模式建議 1~2 最穩定)",
     )
     parser.add_argument("--max-rounds", type=int, default=5, help="上市最大安全補抓輪數 (預設 5 輪)")
     parser.add_argument("--no-excel", action="store_true", help="略過產出 Excel 檔")
@@ -357,6 +376,8 @@ def main():
             trade_date=args.date,
             markets=args.market,
             workers=args.workers,
+            twse_workers=args.twse_workers,
+            tpex_workers=args.tpex_workers,
             max_rounds=args.max_rounds,
             output_dir=args.output_dir,
             export_excel=not args.no_excel,
