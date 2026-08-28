@@ -451,20 +451,19 @@ class TPEXCloudCrawler:
                             failed_symbols.append(sym)
                             stat_msg = body.get("stat") or body.get("message") or str(body)[:60]
                             print(f"[{ts_res}]   [上櫃 {idx}/{total}] [非預期回應: {stat_msg}] {sym}")
-                            # 操作逾時或異常時，徹底重啟 Chrome 會話以換發全新 Token
-                            if "操作逾時" in str(stat_msg) or "逾時" in str(stat_msg):
-                                try: page.quit()
-                                except Exception: pass
-                                page, temp_user_data = self._launch_browser_session(BASE_PORT)
-                            else:
+                            # 遵照官方指示：操作逾時直接原地重新整理頁面 (F5 Refresh)，秒級重獲全新 Token！
+                            try:
+                                page.refresh()
+                            except Exception:
                                 page.get(self.TPEX_URL, retry=2, timeout=20)
                             time.sleep(1.5)
                     else:
                         failed_symbols.append(sym)
                         print(f"[{ts_res}]   [上櫃 {idx}/{total}] [解析失敗] {sym}")
-                        try: page.quit()
-                        except Exception: pass
-                        page, temp_user_data = self._launch_browser_session(BASE_PORT)
+                        try:
+                            page.refresh()
+                        except Exception:
+                            page.get(self.TPEX_URL, retry=2, timeout=20)
                         time.sleep(1.5)
 
                 except Exception as e:
