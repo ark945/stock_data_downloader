@@ -325,11 +325,12 @@ class TPEXCloudCrawler:
     # ---------------- 參數配置 ----------------
     TOKEN_TIMEOUT = 18          # 單檔等待 Turnstile Token 簽發上限 (秒)
     PER_STOCK_TIMEOUT = 25      # 單檔等待 API JSON 回應封包上限 (秒)
-    INTER_STOCK_DELAY = 1.0     # 檔間平穩微延遲 (秒)
+    MIN_INTER_STOCK_DELAY = 1.2 # 檔間平穩微延遲下限 (秒)
+    MAX_INTER_STOCK_DELAY = 2.2 # 檔間平穩微延遲上限 (秒)
     RELOAD_AFTER = 3            # 連續失敗 3 次觸發 Reload 頁面
     RESTART_AFTER = 6           # 連續失敗 6 次觸發重啟瀏覽器
-    ABORT_AFTER = 15            # 連續失敗 15 次觸發安全熔斷
-    COOLDOWN_SEC = 8            # 重啟瀏覽器前冷卻秒數 (秒)
+    ABORT_AFTER = 20            # 連續失敗 20 次觸發安全熔斷
+    COOLDOWN_SEC = 10           # 重啟瀏覽器前冷卻秒數 (秒)
     PAGE_READY_WAIT = 20        # 首頁 / 重載後等待 Token 簽發上限 (秒)
 
     def _click_query(self, page) -> None:
@@ -377,8 +378,9 @@ class TPEXCloudCrawler:
         stock_codes: List[str],
         trade_date: str
     ) -> Tuple[List[pd.DataFrame], List[str]]:
-        """雲端單會話高速抓取 (CDP 網路封包監聽架構 + 全新Token防禦)"""
+        """雲端單會話高速抓取 (CDP 網路封包監聽架構 + 全新Token防禦 + 自適應限流冷卻)"""
         import json
+        import random
         if not stock_codes:
             return [], []
 
@@ -427,6 +429,12 @@ class TPEXCloudCrawler:
 
             for idx, sym in enumerate(stock_codes, 1):
                 try:
+                    # 連續失敗緩衝：若有連續失敗，主動微調冷卻以避開伺服器限流
+                    if fail_streak > 0 and fail_streak % 2 == 0:
+                        cool_streak = min(8 + fail_streak * 2, 20)
+                        print(f"[*] 偵測到連續失敗 {fail_streak} 次，啟動防禦冷卻 {cool_streak} 秒...")
+                        time.sleep(cool_streak)
+
                     # 1. 檢查頁面健康度
                     try:
                         cur_url = page.url or ""
@@ -441,9 +449,9 @@ class TPEXCloudCrawler:
                         self._wait_token(page, timeout=self.PAGE_READY_WAIT)
                         last_used_token = ""
 
-                    # 2. 填入股票代碼與查詢 (支援單檔遇逾時原地重試 1 次)
+                    # 2. 填入股票代碼與查詢 (支援單檔遇逾時原地重試 2 次)
                     stock_success = False
-                    for attempt in range(2):
+                    for attempt in range(3):
                         # 填入代碼
                         code_el = page.ele('@name=code')
                         if code_el:
@@ -473,7 +481,8 @@ class TPEXCloudCrawler:
                             tok = self._wait_token(page, last_tok=last_used_token, timeout=8.0)
 
                         if not tok:
-                            if attempt == 0:
+                            if attempt < 2:
+                                time.sleep(3.0)
                                 page.get(self.TPEX_URL, retry=2, timeout=30)
                                 time.sleep(2.0)
                                 self._wait_token(page, timeout=self.PAGE_READY_WAIT)
@@ -500,7 +509,8 @@ class TPEXCloudCrawler:
                         page.run_js("if (window.turnstile) { try { window.turnstile.reset('#myWidget'); } catch(e){} }")
 
                         if not pkt:
-                            if attempt == 0:
+                            if attempt < 2:
+                                time.sleep(3.0)
                                 page.get(self.TPEX_URL, retry=2, timeout=30)
                                 time.sleep(2.0)
                                 self._wait_token(page, timeout=self.PAGE_READY_WAIT)
@@ -540,14 +550,16 @@ class TPEXCloudCrawler:
                                     print(f"[{ts_res}]   [上櫃 {idx}/{total}] [無成交明細/略過] {sym}")
 
                                 fail_streak = 0
-                                time.sleep(self.INTER_STOCK_DELAY)
+                                jitter = random.uniform(self.MIN_INTER_STOCK_DELAY, self.MAX_INTER_STOCK_DELAY)
+                                time.sleep(jitter)
                                 stock_success = True
                                 break
 
                             elif "stat" in body and ("查無" in str(body["stat"]) or "無交易" in str(body["stat"]) or "無符合" in str(body["stat"])):
                                 print(f"[{ts_res}]   [上櫃 {idx}/{total}] [無成交/略過] {sym}")
                                 fail_streak = 0
-                                time.sleep(self.INTER_STOCK_DELAY)
+                                jitter = random.uniform(self.MIN_INTER_STOCK_DELAY, self.MAX_INTER_STOCK_DELAY)
+                                time.sleep(jitter)
                                 stock_success = True
                                 break
 
@@ -562,8 +574,10 @@ class TPEXCloudCrawler:
 
                             elif "stat" in body and ("操作逾時" in str(body["stat"]) or "真人驗證" in str(body["stat"])):
                                 stat_reason = body.get("stat")
-                                if attempt == 0:
-                                    print(f"[{ts_res}]   [上櫃 {idx}/{total}] [TPEX 頁面逾時 -> 即刻刷新頁面自癒] {sym} (原因: {stat_reason})")
+                                if attempt < 2:
+                                    cool_sec = 8 if attempt == 0 else 15
+                                    print(f"[{ts_res}]   [上櫃 {idx}/{total}] [TPEX 頁面逾時 -> 冷卻 {cool_sec}s 後刷新自癒] {sym} (原因: {stat_reason})")
+                                    time.sleep(cool_sec)
                                     page.get(self.TPEX_URL, retry=2, timeout=30)
                                     time.sleep(2.0)
                                     self._wait_token(page, timeout=self.PAGE_READY_WAIT)
@@ -576,8 +590,8 @@ class TPEXCloudCrawler:
                                     break
 
                             elif str(body.get("status")) == "520" or "520" in str(body.get("title", "")):
-                                if attempt == 0:
-                                    time.sleep(3.0)
+                                if attempt < 2:
+                                    time.sleep(5.0)
                                     page.get(self.TPEX_URL, retry=2, timeout=30)
                                     time.sleep(2.0)
                                     self._wait_token(page, timeout=self.PAGE_READY_WAIT)
@@ -591,7 +605,8 @@ class TPEXCloudCrawler:
 
                             else:
                                 stat_msg = body.get("stat") or body.get("message") or str(body)[:60]
-                                if attempt == 0:
+                                if attempt < 2:
+                                    time.sleep(3.0)
                                     page.get(self.TPEX_URL, retry=2, timeout=30)
                                     time.sleep(2.0)
                                     self._wait_token(page, timeout=self.PAGE_READY_WAIT)
