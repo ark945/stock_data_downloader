@@ -555,12 +555,18 @@ class TPEXCloudCrawler:
                                 break
 
                             elif "stat" in body and ("操作逾時" in str(body["stat"]) or "真人驗證" in str(body["stat"])):
-                                print(f"[{ts_res}]   [上櫃 {idx}/{total}] [TPEX 會話逾時 -> 即刻刷新頁面自癒] {sym}")
-                                page.get(self.TPEX_URL, retry=2, timeout=30)
-                                time.sleep(3.0)
-                                self._wait_token(page, timeout=self.PAGE_READY_WAIT)
-                                time.sleep(1.0)
-                                continue
+                                if attempt == 0:
+                                    print(f"[{ts_res}]   [上櫃 {idx}/{total}] [TPEX 會話逾時 -> 即刻刷新頁面自癒] {sym}")
+                                    page.get(self.TPEX_URL, retry=2, timeout=30)
+                                    time.sleep(3.0)
+                                    self._wait_token(page, timeout=self.PAGE_READY_WAIT)
+                                    time.sleep(1.0)
+                                    continue
+                                else:
+                                    failed_symbols.append(sym)
+                                    fail_streak += 1
+                                    print(f"[{ts_res}]   [上櫃 {idx}/{total}] [TPEX 操作逾時] {sym} (連續失敗: {fail_streak})")
+                                    break
 
                             elif str(body.get("status")) == "520" or "520" in str(body.get("title", "")):
                                 if attempt == 0:
@@ -602,6 +608,8 @@ class TPEXCloudCrawler:
                         fail_streak = 0
                         last_used_token = ""
                 finally:
+                    if not stock_success and sym not in failed_symbols:
+                        failed_symbols.append(sym)
                     processed_symbols.add(sym)
 
                 sys.stdout.flush()
