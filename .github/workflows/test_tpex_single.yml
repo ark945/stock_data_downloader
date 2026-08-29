@@ -1,0 +1,33 @@
+name: TPEX 雲端單檔診斷測試
+
+on:
+  workflow_dispatch:
+    inputs:
+      code:
+        description: "測試代碼"
+        required: false
+        default: "1240"
+
+jobs:
+  test-tpex:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 檢出專案代碼
+        uses: actions/checkout@v4
+
+      - name: 設定 Python 環境
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 安裝 Xvfb 與 Python 依賴
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb
+          pip install DrissionPage pandas requests
+
+      - name: 啟動 Xvfb 並執行深入診斷測試
+        run: |
+          Xvfb :99 -screen 0 1920x1080x24 &
+          export DISPLAY=:99
+          python test_cloud_diagnostics.py
