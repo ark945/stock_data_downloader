@@ -331,10 +331,18 @@ class TPEXCloudCrawler:
         page = None
         temp_user_data = None
 
-        processed_symbols = set()
+        last_used_token = ""
         try:
             print(f"[*] 正在啟動 TPEX 雲端單一持久化引擎 (CDP 封包監聽模式，待抓取: {total} 檔)...")
             page, temp_user_data = self._launch_browser_session()
+            
+            # 確保瀏覽器首頁啟動後，首發 Token 100% 簽發就緒
+            for _ in range(40):
+                time.sleep(0.1)
+                tok = page.run_js("return (document.querySelector('[name=cf-turnstile-response]') || {}).value || '';")
+                if tok and len(tok) > 20:
+                    break
+
             start_t = time.time()
 
             for idx, sym in enumerate(stock_codes, 1):
@@ -342,10 +350,10 @@ class TPEXCloudCrawler:
                     # 方案 A (僅雲端版)：每 10 檔原地同步重新整理首頁，換發全新 Token (Token 年齡永遠 < 20 秒，絕不觸發逾時)
                     if idx > 1 and (idx - 1) % 10 == 0:
                         page.get(self.TPEX_URL, retry=2, timeout=20)
-                        for _ in range(30):
+                        for _ in range(40):
                             time.sleep(0.08)
                             tok = page.run_js("return (document.querySelector('[name=cf-turnstile-response]') || {}).value || '';")
-                            if tok and len(tok) > 20:
+                            if tok and len(tok) > 20 and tok != last_used_token:
                                 break
 
                     cur_url = page.url or ""
@@ -368,12 +376,13 @@ class TPEXCloudCrawler:
                         }}
                     """)
 
-                    # 2. 換發全新 Turnstile Token (若未就緒則快速刷新確保)
+                    # 2. 換發全新 Turnstile Token (確保非空且非已被作廢的舊票)
                     token_ready = False
-                    for _ in range(20):
+                    current_token = ""
+                    for _ in range(25):
                         time.sleep(0.08)
-                        tok = page.run_js("return (document.querySelector('[name=cf-turnstile-response]') || {}).value || '';")
-                        if tok and len(tok) > 20:
+                        current_token = page.run_js("return (document.querySelector('[name=cf-turnstile-response]') || {}).value || '';")
+                        if current_token and len(current_token) > 20:
                             token_ready = True
                             break
 
@@ -388,10 +397,10 @@ class TPEXCloudCrawler:
                                 inp.dispatchEvent(new Event('change', {{ bubbles: true }}));
                             }}
                         """)
-                        for _ in range(30):
+                        for _ in range(35):
                             time.sleep(0.08)
-                            tok = page.run_js("return document.querySelector('[name=cf-turnstile-response]') ? document.querySelector('[name=cf-turnstile-response]').value : '';")
-                            if tok and len(tok) > 20:
+                            current_token = page.run_js("return (document.querySelector('[name=cf-turnstile-response]') || {}).value || '';")
+                            if current_token and len(current_token) > 20:
                                 token_ready = True
                                 break
 
@@ -411,7 +420,10 @@ class TPEXCloudCrawler:
                         failed_symbols.append(sym)
                         print(f"[{ts_res}]   [上櫃 {idx}/{total}] [封包逾時] {sym}")
                         page.get(self.TPEX_URL, retry=2, timeout=20)
-                        time.sleep(1.0)
+                        for _ in range(30):
+                            time.sleep(0.08)
+                            tok = page.run_js("return (document.querySelector('[name=cf-turnstile-response]') || {}).value || '';")
+                            if tok and len(tok) > 20: break
                         continue
 
                     body = None
@@ -443,21 +455,32 @@ class TPEXCloudCrawler:
                             failed_symbols.append(sym)
                             print(f"[{ts_res}]   [上櫃 {idx}/{total}] [CF 520 阻擋] {sym}")
                             page.get(self.TPEX_URL, retry=2, timeout=20)
-                            time.sleep(1.5)
+                            for _ in range(35):
+                                time.sleep(0.08)
+                                tok = page.run_js("return (document.querySelector('[name=cf-turnstile-response]') || {}).value || '';")
+                                if tok and len(tok) > 20: break
                         elif "stat" in body and ("查無" in body["stat"] or "無交易" in body["stat"] or "無符合" in body["stat"]):
                             print(f"[{ts_res}]   [上櫃 {idx}/{total}] [無成交/略過] {sym}")
                         else:
                             failed_symbols.append(sym)
                             stat_msg = body.get("stat") or body.get("message") or str(body)[:60]
                             print(f"[{ts_res}]   [上櫃 {idx}/{total}] [非預期回應: {stat_msg}] {sym}")
-                            # 同步安全刷新頁面，絕不銷毀 Chrome 打斷連線
+                            last_used_token = current_token  # 記錄該無效 Token，避免下檔重複拿廢票
+                            # 嚴格執行同步重載，並死等全新 Token 產生
                             page.get(self.TPEX_URL, retry=2, timeout=20)
-                            time.sleep(1.2)
+                            for _ in range(35):
+                                time.sleep(0.08)
+                                tok = page.run_js("return (document.querySelector('[name=cf-turnstile-response]') || {}).value || '';")
+                                if tok and len(tok) > 20 and tok != last_used_token:
+                                    break
                     else:
                         failed_symbols.append(sym)
                         print(f"[{ts_res}]   [上櫃 {idx}/{total}] [解析失敗] {sym}")
                         page.get(self.TPEX_URL, retry=2, timeout=20)
-                        time.sleep(1.2)
+                        for _ in range(30):
+                            time.sleep(0.08)
+                            tok = page.run_js("return (document.querySelector('[name=cf-turnstile-response]') || {}).value || '';")
+                            if tok and len(tok) > 20: break
 
                 except Exception as e:
                     ts_err = get_taipei_now().strftime("%H:%M:%S")
