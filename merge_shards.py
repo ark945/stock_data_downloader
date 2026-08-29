@@ -54,29 +54,30 @@ def send_telegram_alert(bot_token: str, chat_id: str, message: str) -> bool:
         return False
 
 
-def send_email_alert(
+def send_email_notification(
     trade_date: str,
     total_symbols: int,
     total_rows: int,
     file_size_mb: float,
     market: str = "all",
-    gdrive_link: str = None
-) -> bool:
-    """發送 HTML 視覺化 Email 報表"""
-    smtp_server = os.environ.get("SMTP_SERVER") or os.environ.get("SMTP_HOST") or "smtp.gmail.com"
-    port_str = os.environ.get("SMTP_PORT", "587").strip()
+    gdrive_link: Optional[str] = None,
+    market_details: Optional[dict] = None
+):
+    """發送全市場聚合完成 Email 推播通知 (含 TWSE 與 TPEX 獨立統計明細)"""
+    smtp_server = os.environ.get("SMTP_SERVER", "smtp.gmail.com") or "smtp.gmail.com"
+    port_str = (os.environ.get("SMTP_PORT") or "").strip()
     smtp_port = int(port_str) if port_str.isdigit() else 587
     
     sender_email = (
         os.environ.get("SENDER_EMAIL") or 
         os.environ.get("SMTP_USER") or 
-        os.environ.get("SMTP_USERNAME") or ""
+        ""
     ).strip()
     
     sender_pwd = (
         os.environ.get("SENDER_PASSWORD") or 
         os.environ.get("SMTP_PASSWORD") or 
-        os.environ.get("SMTP_PASS") or ""
+        ""
     ).strip()
     
     receiver_email = (
@@ -91,6 +92,45 @@ def send_email_alert(
 
     market_title = "上市 (TWSE)" if market.lower() == "twse" else ("上櫃 (TPEX)" if market.lower() == "tpex" else "全市場 (上市+上櫃)")
     node_desc = "6 個獨立 IP 並行" if market.lower() == "twse" else ("20 個獨立 IP 並行" if market.lower() == "tpex" else "26 個獨立矩陣節點並行")
+
+    # 構建分市場細部數據表格 (TWSE vs TPEX)
+    market_breakdown_html = ""
+    if market_details and market.lower() == "all":
+        tw_sym = market_details.get("twse_symbols", 0)
+        tw_row = market_details.get("twse_rows", 0)
+        tp_sym = market_details.get("tpex_symbols", 0)
+        tp_row = market_details.get("tpex_rows", 0)
+        market_breakdown_html = f"""
+        <div style="margin-top: 15px; margin-bottom: 20px;">
+            <div style="font-size: 13px; font-weight: bold; color: #4a5568; margin-bottom: 8px;">🏢 雙市場明細拆解 (TWSE 上市 vs TPEX 上櫃)</div>
+            <table style="width: 100%; border-collapse: collapse; font-size: 13px; background: #fafbfc; border: 1px solid #e2e8f0; border-radius: 6px; overflow: hidden;">
+                <thead>
+                    <tr style="background: #edf2f7; color: #4a5568; text-align: left;">
+                        <th style="padding: 8px 12px;">市場名稱</th>
+                        <th style="padding: 8px 12px; text-align: right;">有效標的數</th>
+                        <th style="padding: 8px 12px; text-align: right;">成交明細筆數</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr style="border-bottom: 1px solid #edf2f7;">
+                        <td style="padding: 8px 12px; font-weight: bold; color: #2b6cb0;">🏛️ 上市 (TWSE)</td>
+                        <td style="padding: 8px 12px; text-align: right; color: #2d3748; font-weight: bold;">{tw_sym:,} 檔</td>
+                        <td style="padding: 8px 12px; text-align: right; color: #2f855a; font-weight: bold;">{tw_row:,} 筆</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid #edf2f7;">
+                        <td style="padding: 8px 12px; font-weight: bold; color: #d69e2e;">🏪 上櫃 (TPEX)</td>
+                        <td style="padding: 8px 12px; text-align: right; color: #2d3748; font-weight: bold;">{tp_sym:,} 檔</td>
+                        <td style="padding: 8px 12px; text-align: right; color: #2f855a; font-weight: bold;">{tp_row:,} 筆</td>
+                    </tr>
+                    <tr style="background: #f7fafc; font-weight: bold;">
+                        <td style="padding: 8px 12px; color: #1a202c;">🌐 全市場合計</td>
+                        <td style="padding: 8px 12px; text-align: right; color: #2b6cb0;">{total_symbols:,} 檔</td>
+                        <td style="padding: 8px 12px; text-align: right; color: #2f855a;">{total_rows:,} 筆</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+        """
 
     try:
         subject = f"🚀 【台股{market_title}分點日報】{trade_date} 雲端矩陣採集完成 ({total_symbols:,} 檔 / {total_rows:,} 筆)"
@@ -111,17 +151,20 @@ def send_email_alert(
                     <p style="margin: 8px 0 0 0; opacity: 0.9; font-size: 14px;">雲端分散式矩陣極速採集成功</p>
                 </div>
                 <div style="padding: 25px;">
-                    <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;">
+                    <table style="width: 100%; border-collapse: collapse; margin-bottom: 10px;">
                         <tr style="border-bottom: 1px solid #edf2f7;"><td style="padding: 10px 0; color: #718096; font-size: 14px;">📅 交易日期</td><td style="padding: 10px 0; font-weight: bold; text-align: right; color: #2d3748;">{trade_date}</td></tr>
                         <tr style="border-bottom: 1px solid #edf2f7;"><td style="padding: 10px 0; color: #718096; font-size: 14px;">🎯 目標市場</td><td style="padding: 10px 0; font-weight: bold; text-align: right; color: #2b6cb0;">{market.upper()} ({market_title})</td></tr>
-                        <tr style="border-bottom: 1px solid #edf2f7;"><td style="padding: 10px 0; color: #718096; font-size: 14px;">🏢 涵蓋標的數</td><td style="padding: 10px 0; font-weight: bold; text-align: right; color: #2b6cb0;">{total_symbols:,} 檔</td></tr>
-                        <tr style="border-bottom: 1px solid #edf2f7;"><td style="padding: 10px 0; color: #718096; font-size: 14px;">📈 明細總筆數</td><td style="padding: 10px 0; font-weight: bold; text-align: right; color: #2f855a;">{total_rows:,} 列</td></tr>
+                        <tr style="border-bottom: 1px solid #edf2f7;"><td style="padding: 10px 0; color: #718096; font-size: 14px;">🏢 總涵蓋標的數</td><td style="padding: 10px 0; font-weight: bold; text-align: right; color: #2b6cb0;">{total_symbols:,} 檔</td></tr>
+                        <tr style="border-bottom: 1px solid #edf2f7;"><td style="padding: 10px 0; color: #718096; font-size: 14px;">📈 總明細筆數</td><td style="padding: 10px 0; font-weight: bold; text-align: right; color: #2f855a;">{total_rows:,} 列</td></tr>
                         <tr style="border-bottom: 1px solid #edf2f7;"><td style="padding: 10px 0; color: #718096; font-size: 14px;">📦 資料庫容量</td><td style="padding: 10px 0; font-weight: bold; text-align: right; color: #4a5568;">{file_size_mb:.2f} MB (Parquet)</td></tr>
                         <tr><td style="padding: 10px 0; color: #718096; font-size: 14px;">⚡ 雲端矩陣節點</td><td style="padding: 10px 0; font-weight: bold; text-align: right; color: #d69e2e;">{node_desc}</td></tr>
                     </table>
+
+                    {market_breakdown_html}
+
                     {gdrive_btn}
                     <div style="background: #ebf8ff; border-left: 4px solid #3182ce; padding: 12px 15px; border-radius: 4px; font-size: 13px; color: #2b6cb0;">
-                        ✅ <b>100% 完整採集</b>：所有個股分點明細與執行日誌已標準化歸檔至 Google Drive。
+                        ✅ <b>全市場完整採集</b>：所有上市與上櫃個股分點明細與執行日誌已標準化歸檔至 Google Drive。
                     </div>
                 </div>
                 <div style="background: #f7fafc; padding: 15px; text-align: center; color: #a0aec0; font-size: 12px; border-top: 1px solid #edf2f7;">
@@ -400,14 +443,31 @@ def merge_parquet_shards(output_dir: str = "output", trade_date: str = "", marke
     else:
         print("[*] 提示：未設定 TELEGRAM_BOT_TOKEN 或 TELEGRAM_CHAT_ID，略過 Telegram 發送。")
 
-    # 5. Email 報表發送
-    send_email_alert(
+    # 5. Email 報表發送 (含雙市場細部拆解)
+    market_details = {}
+    if market == "all":
+        try:
+            for f in target_files:
+                base_n = os.path.basename(f).lower()
+                if "twse" in base_n:
+                    tdf = pd.read_parquet(f)
+                    market_details["twse_symbols"] = tdf["symbol"].nunique()
+                    market_details["twse_rows"] = len(tdf)
+                elif "tpex" in base_n:
+                    pdf = pd.read_parquet(f)
+                    market_details["tpex_symbols"] = pdf["symbol"].nunique()
+                    market_details["tpex_rows"] = len(pdf)
+        except Exception:
+            pass
+
+    send_email_notification(
         trade_date=trade_date,
         total_symbols=total_symbols,
         total_rows=total_rows,
         file_size_mb=file_size_mb,
         market=market,
-        gdrive_link=gdrive_link
+        gdrive_link=gdrive_link,
+        market_details=market_details
     )
 
 
@@ -415,3 +475,4 @@ if __name__ == "__main__":
     t_date = sys.argv[1] if len(sys.argv) > 1 else ""
     t_market = sys.argv[2] if len(sys.argv) > 2 else "all"
     merge_parquet_shards("output", t_date, t_market)
+

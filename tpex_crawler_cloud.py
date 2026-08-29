@@ -339,6 +339,15 @@ class TPEXCloudCrawler:
 
             for idx, sym in enumerate(stock_codes, 1):
                 try:
+                    # 方案 A (僅雲端版)：每 10 檔原地同步重新整理首頁，換發全新 Token (Token 年齡永遠 < 20 秒，絕不觸發逾時)
+                    if idx > 1 and (idx - 1) % 10 == 0:
+                        page.get(self.TPEX_URL, retry=2, timeout=20)
+                        for _ in range(30):
+                            time.sleep(0.08)
+                            tok = page.run_js("return (document.querySelector('[name=cf-turnstile-response]') || {}).value || '';")
+                            if tok and len(tok) > 20:
+                                break
+
                     cur_url = page.url or ""
                     cur_title = page.title or ""
                     if "brokerBS.html" not in cur_url or "520" in cur_title or "Error" in cur_title or "unknown error" in cur_title:
@@ -363,7 +372,7 @@ class TPEXCloudCrawler:
                     token_ready = False
                     for _ in range(20):
                         time.sleep(0.08)
-                        tok = page.run_js("return document.querySelector('[name=cf-turnstile-response]') ? document.querySelector('[name=cf-turnstile-response]').value : '';")
+                        tok = page.run_js("return (document.querySelector('[name=cf-turnstile-response]') || {}).value || '';")
                         if tok and len(tok) > 20:
                             token_ready = True
                             break
