@@ -285,30 +285,10 @@ class TPEXCloudCrawler:
             print(f"[!] 解析 TPEX CSV 失敗 ({stock_id}): {e}")
             return None
 
-    # ---------------- 參數寬裕化配置 ----------------
-    TOKEN_TIMEOUT = 15          # 單檔等待 Turnstile Token 簽發上限 (秒)
-    PER_STOCK_TIMEOUT = 25      # 單檔等待 API JSON 回應封包上限 (秒)
-    INTER_STOCK_DELAY = 1.5     # 檔間平穩擬人間隔 (秒)
-    RELOAD_AFTER = 3            # 連續失敗 3 次觸發 Reload 頁面
-    RESTART_AFTER = 6           # 連續失敗 6 次觸發重啟瀏覽器
-    ABORT_AFTER = 20            # 連續失敗 20 次觸發安全熔斷
-    COOLDOWN_SEC = 20           # 重啟瀏覽器前冷卻秒數 (秒)
-    PAGE_READY_WAIT = 30        # 首頁 / 重載後等待 Token 簽發上限 (秒)
-
-    def _wait_token(self, page, timeout: int = 15) -> str:
-        """輪詢等待 Cloudflare Turnstile Token 生成就緒 (長度 > 50)"""
-        for i in range(int(timeout * 3)):
+    def _wait_token(self, page, timeout: float = 12.0) -> str:
+        """強韌等待並提取 Cloudflare Turnstile 授權 Token"""
+        for i in range(int(timeout * 2)):
             try:
-                if i == 0 or i % 5 == 0:
-                    page.run_js("""
-                        if (typeof window.turnstile !== 'undefined') {
-                            try { if (window.turnstile.execute) window.turnstile.execute(); } catch(e){}
-                        }
-                    """)
-
-                if i > 0 and i % 8 == 0:
-                    page.run_js("window.scrollBy(0, 10); window.dispatchEvent(new Event('mousemove'));")
-
                 t = page.run_js("""
                     if (typeof window.turnstile !== 'undefined' && window.turnstile.getResponse) {
                         const r = window.turnstile.getResponse();
@@ -321,10 +301,27 @@ class TPEXCloudCrawler:
                 """)
                 if t and len(t) > 50:
                     return t
+
+                # 若 1.5 秒內未主動簽發，觸發 execute
+                if i == 3:
+                    page.run_js("if (window.turnstile && window.turnstile.execute) { try { window.turnstile.execute(); } catch(e){} }")
+                # 若 6 秒內仍未生成，執行安全重置
+                elif i == 12:
+                    page.run_js("if (window.turnstile) { try { window.turnstile.reset(); } catch(e){} try { window.turnstile.execute(); } catch(e){} }")
             except Exception:
                 pass
-            time.sleep(0.35)
+            time.sleep(0.5)
         return ""
+
+    # ---------------- 參數寬裕化配置 ----------------
+    TOKEN_TIMEOUT = 15          # 單檔等待 Turnstile Token 簽發上限 (秒)
+    PER_STOCK_TIMEOUT = 25      # 單檔等待 API JSON 回應封包上限 (秒)
+    INTER_STOCK_DELAY = 1.5     # 檔間平穩擬人間隔 (秒)
+    RELOAD_AFTER = 3            # 連續失敗 3 次觸發 Reload 頁面
+    RESTART_AFTER = 6           # 連續失敗 6 次觸發重啟瀏覽器
+    ABORT_AFTER = 20            # 連續失敗 20 次觸發安全熔斷
+    COOLDOWN_SEC = 20           # 重啟瀏覽器前冷卻秒數 (秒)
+    PAGE_READY_WAIT = 30        # 首頁 / 重載後等待 Token 簽發上限 (秒)
 
     def _click_query(self, page) -> None:
         """精準點擊 form.formblock 日報表查詢按鈕"""
@@ -436,8 +433,8 @@ class TPEXCloudCrawler:
                         self._wait_token(page, timeout=self.PAGE_READY_WAIT)
                         time.sleep(1.0)
                     elif idx > 1:
-                        # 檔間主動觸發 Turnstile 重置與執行簽發
-                        page.run_js("if (window.turnstile) { try { window.turnstile.reset(); } catch(e){} try { window.turnstile.execute(); } catch(e){} }")
+                        # 檔間主動觸發 Turnstile 安全重置
+                        page.run_js("if (window.turnstile) { try { window.turnstile.reset(); } catch(e){} }")
 
                     # 1. 檢查頁面健康度
                     try:
