@@ -83,7 +83,7 @@ jobs:
     needs: pre-check
     if: ${{ needs.pre-check.outputs.should_skip != 'true' && (github.event_name == 'schedule' || github.event.inputs.market == 'all' || github.event.inputs.market == 'twse' || github.event.inputs.market == '') }}
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -126,6 +126,7 @@ jobs:
           fi
 
       - name: 上傳 TWSE 分片產物 (Parquet 與 Log)
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: twse-shard-${{ matrix.shard }}
@@ -143,7 +144,7 @@ jobs:
     needs: pre-check
     if: ${{ needs.pre-check.outputs.should_skip != 'true' && (github.event_name == 'schedule' || github.event.inputs.market == 'all' || github.event.inputs.market == 'tpex' || github.event.inputs.market == '') }}
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -208,6 +209,7 @@ jobs:
           fi
 
       - name: 上傳 TPEX 分片產物 (Parquet 與 Log)
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: tpex-shard-${{ matrix.shard }}

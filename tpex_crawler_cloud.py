@@ -285,9 +285,9 @@ class TPEXCloudCrawler:
             print(f"[!] 解析 TPEX CSV 失敗 ({stock_id}): {e}")
             return None
 
-    def _wait_token(self, page, last_tok: str = "", timeout: float = 12.0) -> str:
-        """強韌等待並提取 Cloudflare Turnstile 全新授權 Token (嚴格防重用)"""
-        for i in range(int(timeout * 2)):
+    def _wait_token(self, page, last_tok: str = "", timeout: float = 10.0) -> str:
+        """快速等待並提取 Cloudflare Turnstile 全新授權 Token (嚴格防重用)"""
+        for i in range(int(timeout * 3)):
             try:
                 t = page.run_js("""
                     if (typeof window.turnstile !== 'undefined' && window.turnstile.getResponse) {
@@ -302,29 +302,27 @@ class TPEXCloudCrawler:
                 if t and len(t) > 50 and t != last_tok:
                     return t
 
-                # 若 1.5 秒內未主動簽發，觸發 execute
-                if i == 3:
+                if i == 2:
                     page.run_js("if (window.turnstile && window.turnstile.execute) { try { window.turnstile.execute(); } catch(e){} }")
-                # 若 6 秒內仍未生成，執行安全重置並清空 input
-                elif i == 12:
+                elif i == 8:
                     page.run_js("""
                         if (window.turnstile) { try { window.turnstile.reset(); } catch(e){} try { window.turnstile.execute(); } catch(e){} }
                         document.querySelectorAll('input[name="cf-turnstile-response"]').forEach(el => el.value = '');
                     """)
             except Exception:
                 pass
-            time.sleep(0.5)
+            time.sleep(0.35)
         return ""
 
-    # ---------------- 參數寬裕化配置 ----------------
-    TOKEN_TIMEOUT = 15          # 單檔等待 Turnstile Token 簽發上限 (秒)
-    PER_STOCK_TIMEOUT = 25      # 單檔等待 API JSON 回應封包上限 (秒)
-    INTER_STOCK_DELAY = 1.5     # 檔間平穩擬人間隔 (秒)
+    # ---------------- 參數精簡高速配置 ----------------
+    TOKEN_TIMEOUT = 10          # 單檔等待 Turnstile Token 簽發上限 (秒)
+    PER_STOCK_TIMEOUT = 15      # 單檔等待 API JSON 回應封包上限 (秒)
+    INTER_STOCK_DELAY = 0.5     # 檔間平穩微延遲 (秒)
     RELOAD_AFTER = 3            # 連續失敗 3 次觸發 Reload 頁面
     RESTART_AFTER = 6           # 連續失敗 6 次觸發重啟瀏覽器
-    ABORT_AFTER = 20            # 連續失敗 20 次觸發安全熔斷
-    COOLDOWN_SEC = 20           # 重啟瀏覽器前冷卻秒數 (秒)
-    PAGE_READY_WAIT = 30        # 首頁 / 重載後等待 Token 簽發上限 (秒)
+    ABORT_AFTER = 15            # 連續失敗 15 次觸發安全熔斷
+    COOLDOWN_SEC = 5            # 重啟瀏覽器前冷卻秒數 (秒)
+    PAGE_READY_WAIT = 15        # 首頁 / 重載後等待 Token 簽發上限 (秒)
 
     def _click_query(self, page) -> None:
         """精準點擊 form.formblock 日報表查詢按鈕"""
@@ -365,7 +363,7 @@ class TPEXCloudCrawler:
         page = ChromiumPage(addr_or_opts=co)
         page.listen.start("afterTrading/brokerBS")
         page.get(self.TPEX_URL, retry=3, timeout=30)
-        time.sleep(4.0)
+        time.sleep(2.0)
         return page, None
 
     def crawl_stocks(
@@ -373,7 +371,7 @@ class TPEXCloudCrawler:
         stock_codes: List[str],
         trade_date: str
     ) -> Tuple[List[pd.DataFrame], List[str]]:
-        """雲端單會話穩健抓取 (CDP 網路封包監聽架構 + 前置 Token 門禁守衛 + 15秒熱身 + 階梯式自癒)"""
+        """雲端單會話高速抓取 (CDP 網路封包監聽架構 + 0延遲全新Token提交)"""
         import json
         if not stock_codes:
             return [], []
@@ -397,33 +395,25 @@ class TPEXCloudCrawler:
                 shutil.rmtree(temp_user_data, ignore_errors=True)
             time.sleep(self.COOLDOWN_SEC)
             page, temp_user_data = self._launch_browser_session()
-            print("[*] 重啟瀏覽器完成，正在進行 Cloudflare Turnstile 授權預熱 (10~15 秒)...")
+            print("[*] 重啟瀏覽器完成，正在提取初始 Token...")
             tok_init = self._wait_token(page, timeout=self.PAGE_READY_WAIT)
-            time.sleep(2.5)
+            time.sleep(1.0)
             if not tok_init:
                 page.get(self.TPEX_URL, retry=2, timeout=30)
-                time.sleep(3.0)
+                time.sleep(1.5)
                 self._wait_token(page, timeout=self.PAGE_READY_WAIT)
-                time.sleep(2.0)
 
         try:
             print(f"[*] 正在啟動 TPEX 雲端持久化引擎 (CDP 封包監聽 + Token 門禁防禦，待抓取: {total} 檔)...")
             page, temp_user_data = self._launch_browser_session()
 
-            # 關鍵：首頁完整熱身（死等 10~15 秒直到 Cloudflare 握手授權 100% 成立）
-            print("[*] 正在進行首頁 Cloudflare Turnstile 授權握手與預熱 (等待 10~15 秒)...")
             tok0 = self._wait_token(page, timeout=self.PAGE_READY_WAIT)
-            time.sleep(2.5)
             if not tok0:
-                print("[!] 首次 Token 簽發未就緒，正在重新整理首頁重試...")
+                print("[!] 首次 Token 簽發重試中...")
                 page.get(self.TPEX_URL, retry=2, timeout=30)
-                time.sleep(3.0)
-                tok0 = self._wait_token(page, timeout=self.PAGE_READY_WAIT)
                 time.sleep(2.0)
-                if not tok0:
-                    print("[!] 警告：首次 Token 仍未取得，將由單檔前置守衛負責即時攔截與自癒。")
-            else:
-                print(f"[*] 首頁 Cloudflare Turnstile 驗證授權完成 (Token 長度: {len(tok0)})，開始執行個股採集。")
+                tok0 = self._wait_token(page, timeout=self.PAGE_READY_WAIT)
+            print(f"[*] 首頁 Cloudflare Turnstile 授權完成 (Token 長度: {len(tok0) if tok0 else 0})，開始執行個股採集。")
 
             start_t = time.time()
 

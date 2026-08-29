@@ -319,6 +319,12 @@ def run_full_market_crawler(
         duration_str=duration_str
     )
 
+    if all_failed_items:
+        log_msg(f"[!] 嚴格品質檢查：本分片共有 {len(all_failed_items)} 檔失敗，判定本節點失敗！")
+        for itm in all_failed_items:
+            log_msg(f"    - {itm['symbol']} ({itm['name']}): {itm['reason']}")
+        raise RuntimeError(f"分片採集未達 100% 成功，共 {len(all_failed_items)} 檔失敗。")
+
 
 def main():
     parser = argparse.ArgumentParser(description="全市場台股分點買賣日報表爬蟲協調控制器 (含 5 輪補抓與 Email 短缺通知)")
