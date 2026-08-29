@@ -353,7 +353,7 @@ class TPEXCloudCrawler:
         co.set_argument("--window-size=1920,1080")
 
         page = ChromiumPage(addr_or_opts=co)
-        page.listen.start("afterTrading/brokerBS")
+        page.listen.start(["afterTrading", "brokerBS"])
         page.get(self.TPEX_URL, retry=3, timeout=30)
         time.sleep(2.0)
         return page, None
