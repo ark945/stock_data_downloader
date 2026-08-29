@@ -121,17 +121,24 @@ def _mp_local_worker_task(
                         # 2. 換發全新 Turnstile Token (前置門禁防護)
                         token_ready = False
                         current_tok = ""
-                        for _ in range(30):
+                        for _ in range(35):
                             time.sleep(0.3)
-                            tok = page.run_js("return document.querySelector('[name=cf-turnstile-response]') ? document.querySelector('[name=cf-turnstile-response]').value : '';")
-                            if tok and len(tok) > 20:
+                            tok = page.run_js("""
+                                if (typeof window.turnstile !== 'undefined' && window.turnstile.getResponse) {
+                                    const r = window.turnstile.getResponse();
+                                    if (r && r.length > 50) return r;
+                                }
+                                const el = document.querySelector('form.formblock input[name="cf-turnstile-response"]') || document.querySelector('input[name="cf-turnstile-response"]');
+                                return el ? (el.value || '') : '';
+                            """)
+                            if tok and len(tok) > 50:
                                 token_ready = True
                                 current_tok = tok
                                 break
 
                         if not token_ready:
                             page.get(tpex_url, retry=2, timeout=25)
-                            time.sleep(2.0)
+                            time.sleep(3.0)
                             page.run_js(f"""
                                 const inp = document.querySelector('input.code') || document.querySelector('[name=code]');
                                 if (inp) {{
@@ -140,10 +147,17 @@ def _mp_local_worker_task(
                                     inp.dispatchEvent(new Event('change', {{ bubbles: true }}));
                                 }}
                             """)
-                            for _ in range(40):
+                            for _ in range(45):
                                 time.sleep(0.3)
-                                tok = page.run_js("return document.querySelector('[name=cf-turnstile-response]') ? document.querySelector('[name=cf-turnstile-response]').value : '';")
-                                if tok and len(tok) > 20:
+                                tok = page.run_js("""
+                                    if (typeof window.turnstile !== 'undefined' && window.turnstile.getResponse) {
+                                        const r = window.turnstile.getResponse();
+                                        if (r && r.length > 50) return r;
+                                    }
+                                    const el = document.querySelector('form.formblock input[name="cf-turnstile-response"]') || document.querySelector('input[name="cf-turnstile-response"]');
+                                    return el ? (el.value || '') : '';
+                                """)
+                                if tok and len(tok) > 50:
                                     token_ready = True
                                     current_tok = tok
                                     break
@@ -154,20 +168,27 @@ def _mp_local_worker_task(
                                 time.sleep(1.5)
                             continue
 
-                        # 3. 清空監聽佇列並點擊查詢按鈕 (100% 精準觸發 formblock 內部)
+                        # 3. 清空監聽佇列並點擊查詢按鈕 (100% 精準觸發 form.formblock 內部)
                         page.listen.clear()
-                        page.run_js("""
-                            const btn = document.querySelector('div.formblock button[type="submit"]') || 
-                                        document.querySelector('form.formblock button[type="submit"]') ||
-                                        Array.from(document.querySelectorAll('div.formblock button, form.formblock button, button, a')).find(b => (b.innerText||'').trim() === '查詢');
-                            if (btn) btn.click();
-                        """)
+                        q_btn = page.ele('css:form.formblock button[type="submit"]') or page.ele('css:div.tables-tools button[type="submit"]')
+                        if q_btn:
+                            try:
+                                q_btn.click()
+                            except Exception:
+                                page.run_js("const b = document.querySelector('form.formblock button[type=\"submit\"]'); if (b) b.click();")
+                        else:
+                            page.run_js("""
+                                const btn = document.querySelector('form.formblock button[type="submit"]') || 
+                                            document.querySelector('div.tables-tools button[type="submit"]') ||
+                                            Array.from(document.querySelectorAll('button')).find(b => (b.innerText||'').trim() === '查詢');
+                                if (btn) btn.click();
+                            """)
 
                         pkt = page.listen.wait(timeout=25)
                         ts_res = datetime.now().strftime("%H:%M:%S")
 
-                        # 主動銷毀已送出之 Token
-                        page.run_js("const el = document.querySelector('[name=cf-turnstile-response]'); if (el) el.value = '';")
+                        # 觸發 Turnstile 背景重簽
+                        page.run_js("if (window.turnstile) try { window.turnstile.reset(); } catch(e){}")
 
                         if not pkt:
                             if attempt < 3:

@@ -286,23 +286,29 @@ class TPEXCloudCrawler:
             return None
 
     # ---------------- 參數寬裕化配置 ----------------
-    TOKEN_TIMEOUT = 30          # 單檔等待 Turnstile Token 簽發上限 (秒)
+    TOKEN_TIMEOUT = 35          # 單檔等待 Turnstile Token 簽發上限 (秒)
     PER_STOCK_TIMEOUT = 35      # 單檔等待 API JSON 回應封包上限 (秒)
     INTER_STOCK_DELAY = 2.0     # 檔間平穩擬人間隔 (秒)
     RELOAD_AFTER = 3            # 連續失敗 3 次觸發 Reload 頁面
     RESTART_AFTER = 6           # 連續失敗 6 次觸發重啟瀏覽器
     ABORT_AFTER = 20            # 連續失敗 20 次觸發安全熔斷
     COOLDOWN_SEC = 30           # 重啟瀏覽器前冷卻秒數 (秒)
-    PAGE_READY_WAIT = 25        # 首頁 / 重載後等待 Token 簽發上限 (秒)
+    PAGE_READY_WAIT = 40        # 首頁 / 重載後等待 Token 簽發上限 (秒)
 
-    def _wait_token(self, page, timeout: int = 30, last_token: str = "") -> str:
-        """輪詢等待 Cloudflare Turnstile Token 生成就緒 (長度 > 20 且不同於上一個已用 Token)"""
+    def _wait_token(self, page, timeout: int = 35, last_token: str = "") -> str:
+        """輪詢等待 Cloudflare Turnstile Token 生成就緒 (長度 > 50 且不同於上一個已用 Token)"""
         for _ in range(int(timeout * 2.5)):
             try:
-                t = page.run_js(
-                    "return (document.querySelector('input[name=\"cf-turnstile-response\"]') || {}).value || '';"
-                )
-                if t and len(t) > 20 and t != last_token:
+                t = page.run_js("""
+                    if (typeof window.turnstile !== 'undefined' && window.turnstile.getResponse) {
+                        const r = window.turnstile.getResponse();
+                        if (r && r.length > 50) return r;
+                    }
+                    const el = document.querySelector('form.formblock input[name="cf-turnstile-response"]') || 
+                               document.querySelector('input[name="cf-turnstile-response"]');
+                    return el ? (el.value || '') : '';
+                """)
+                if t and len(t) > 50 and t != last_token:
                     return t
             except Exception:
                 pass
@@ -310,8 +316,8 @@ class TPEXCloudCrawler:
         return ""
 
     def _click_query(self, page) -> None:
-        """精準點擊日報表查詢按鈕"""
-        q_btn = page.ele('css:div.tables-tools button[type="submit"]') or page.ele('css:form.formblock button[type="submit"]') or page.ele('css:.btn-query')
+        """精準點擊 form.formblock 日報表查詢按鈕"""
+        q_btn = page.ele('css:form.formblock button[type="submit"]') or page.ele('css:div.tables-tools button[type="submit"]') or page.ele('css:.btn-query')
         if q_btn:
             try:
                 q_btn.click()
@@ -319,9 +325,9 @@ class TPEXCloudCrawler:
             except Exception:
                 pass
         page.run_js("""
-            const btn = document.querySelector('div.tables-tools button[type="submit"]') || 
+            const btn = document.querySelector('form.formblock button[type="submit"]') || 
+                        document.querySelector('div.tables-tools button[type="submit"]') ||
                         document.querySelector('div.formblock button[type="submit"]') ||
-                        document.querySelector('form.formblock button[type="submit"]') ||
                         Array.from(document.querySelectorAll('button')).find(b => (b.innerText||'').trim() === '查詢');
             if (btn) btn.click();
         """)
