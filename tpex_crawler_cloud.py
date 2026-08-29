@@ -451,6 +451,7 @@ class TPEXCloudCrawler:
                                 print(f"[{ts_res}]   [上櫃 {idx}/{total}] [OK] {sym} ({len(df)} 筆) | 速度: {speed:.2f} 檔/s | 剩餘約: {remain/60:.1f} 分鐘")
                             else:
                                 print(f"[{ts_res}]   [上櫃 {idx}/{total}] [無成交明細/略過] {sym}")
+                            time.sleep(1.5)  # 擬人化節奏冷卻 1.5 秒，避免觸發 Cloudflare 突發頻率限制
                         elif str(body.get("status")) == "520" or "520" in str(body.get("title", "")):
                             failed_symbols.append(sym)
                             print(f"[{ts_res}]   [上櫃 {idx}/{total}] [CF 520 阻擋] {sym}")
@@ -461,6 +462,7 @@ class TPEXCloudCrawler:
                                 if tok and len(tok) > 20: break
                         elif "stat" in body and ("查無" in body["stat"] or "無交易" in body["stat"] or "無符合" in body["stat"]):
                             print(f"[{ts_res}]   [上櫃 {idx}/{total}] [無成交/略過] {sym}")
+                            time.sleep(1.5)  # 擬人化節奏冷卻 1.5 秒
                         else:
                             failed_symbols.append(sym)
                             stat_msg = body.get("stat") or body.get("message") or str(body)[:60]
