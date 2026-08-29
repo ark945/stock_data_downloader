@@ -325,24 +325,19 @@ class TPEXCloudCrawler:
     PAGE_READY_WAIT = 15        # 首頁 / 重載後等待 Token 簽發上限 (秒)
 
     def _click_query(self, page) -> None:
-        """精準提交表單 (標準 form.requestSubmit + 按鈕點擊雙重保險)"""
-        try:
-            page.run_js("""
-                const form = document.querySelector('form#tables-form') || document.querySelector('form.formblock') || document.querySelector('form');
-                if (form && typeof form.requestSubmit === 'function') {
-                    form.requestSubmit();
-                } else {
-                    const btn = document.querySelector('form.formblock button[type="submit"]') || 
-                                document.querySelector('div.tables-tools button[type="submit"]') ||
-                                document.querySelector('button[type="submit"]');
-                    if (btn) btn.click();
-                }
-            """)
-        except Exception:
-            q_btn = page.ele('css:form.formblock button[type="submit"]') or page.ele('css:button[type="submit"]')
-            if q_btn:
-                try: q_btn.click()
-                except Exception: pass
+        """精準點擊 form.formblock 日報表查詢按鈕 (ele.click + JS Click 雙重保險)"""
+        q_btn = page.ele('css:form.formblock button[type="submit"]') or page.ele('css:div.tables-tools button[type="submit"]')
+        if q_btn:
+            try:
+                q_btn.click()
+                return
+            except Exception:
+                pass
+        page.run_js("""
+            const btn = document.querySelector('form.formblock button[type="submit"]') || 
+                        document.querySelector('div.tables-tools button[type="submit"]');
+            if (btn) btn.click();
+        """)
 
     def _launch_browser_session(self, port: Optional[int] = None):
         from DrissionPage import ChromiumPage, ChromiumOptions
