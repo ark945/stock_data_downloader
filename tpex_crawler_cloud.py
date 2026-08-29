@@ -332,16 +332,26 @@ class TPEXCloudCrawler:
         temp_user_data = None
 
         last_used_token = ""
+        processed_symbols = set()
         try:
             print(f"[*] 正在啟動 TPEX 雲端單一持久化引擎 (CDP 封包監聽模式，待抓取: {total} 檔)...")
             page, temp_user_data = self._launch_browser_session()
             
             # 確保瀏覽器首頁啟動後，首發 Token 100% 簽發就緒
+            token_ok = False
             for _ in range(40):
                 time.sleep(0.1)
                 tok = page.run_js("return (document.querySelector('[name=cf-turnstile-response]') || {}).value || '';")
                 if tok and len(tok) > 20:
+                    token_ok = True
                     break
+            
+            if not token_ok:
+                page.get(self.TPEX_URL, retry=2, timeout=20)
+                for _ in range(40):
+                    time.sleep(0.1)
+                    tok = page.run_js("return (document.querySelector('[name=cf-turnstile-response]') || {}).value || '';")
+                    if tok and len(tok) > 20: break
 
             start_t = time.time()
 
