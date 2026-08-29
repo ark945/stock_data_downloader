@@ -417,9 +417,12 @@ class TPEXCloudCrawler:
 
             for idx, sym in enumerate(stock_codes, 1):
                 try:
-                    # 每檔（含第 1 檔）皆主動重置 Turnstile 與清空 input，保證現產現用
+                    # 每檔（含第 1 檔）皆主動重置並立即觸發 Turnstile 求解，保證現產現用
                     page.run_js("""
-                        if (window.turnstile) { try { window.turnstile.reset(); } catch(e){} }
+                        if (window.turnstile) {
+                            try { window.turnstile.reset(); } catch(e){}
+                            try { window.turnstile.execute(); } catch(e){}
+                        }
                         document.querySelectorAll('input[name="cf-turnstile-response"]').forEach(el => el.value = '');
                     """)
 
