@@ -292,15 +292,14 @@ class TPEXCloudCrawler:
             try:
                 t = page.run_js("""
                     let tok = '';
-                    if (typeof window.turnstile !== 'undefined' && window.turnstile.getResponse) {
+                    const el = document.querySelector('input[name="cf-turnstile-response"]') || 
+                               document.querySelector('form.formblock input[name="cf-turnstile-response"]');
+                    if (el && el.value && el.value.length > 20) {
+                        tok = el.value;
+                    } else if (typeof window.turnstile !== 'undefined' && window.turnstile.getResponse) {
                         try {
                             tok = window.turnstile.getResponse('#myWidget') || window.turnstile.getResponse() || '';
                         } catch(e) {}
-                    }
-                    if (!tok || tok.length < 20) {
-                        const el = document.querySelector('form.formblock input[name="cf-turnstile-response"]') || 
-                                   document.querySelector('input[name="cf-turnstile-response"]');
-                        if (el && el.value) tok = el.value;
                     }
                     return tok || '';
                 """)
@@ -316,21 +315,22 @@ class TPEXCloudCrawler:
     PER_STOCK_TIMEOUT = 15      # 單檔等待 API JSON 回應封包上限 (秒)
     MIN_INTER_STOCK_DELAY = 0.5 # 檔間平穩微延遲下限 (秒)
     MAX_INTER_STOCK_DELAY = 1.0 # 檔間平穩微延遲上限 (秒)
-    PAGE_READY_WAIT = 20        # 首頁 / 重載後等待 Token 簽發上限 (秒)
+    PAGE_READY_WAIT = 25        # 首頁 / 重載後等待 Token 簽發上限 (秒)
 
     def _click_query(self, page) -> None:
-        """精準點擊 form.formblock 日報表查詢按鈕 (ele.click + JS Click 雙重保險)"""
-        q_btn = page.ele('css:form.formblock button[type="submit"]') or page.ele('css:div.tables-tools button[type="submit"]')
-        if q_btn:
-            try:
-                q_btn.click()
-                return
-            except Exception:
-                pass
+        """精準點擊日報表「查詢」按鈕 (文字判定 + CSS Selector 雙重保險)"""
         page.run_js("""
-            const btn = document.querySelector('form.formblock button[type="submit"]') || 
-                        document.querySelector('div.tables-tools button[type="submit"]');
-            if (btn) btn.click();
+            const els = Array.from(document.querySelectorAll('button, a, input[type=button], input[type=submit]'));
+            const t = els.find(e => (e.innerText || e.value || '').trim() === '查詢');
+            if (t) {
+                t.click();
+            } else {
+                const btn = document.querySelector('form.formblock button[type="submit"]') || 
+                            document.querySelector('div.tables-tools button[type="submit"]') ||
+                            document.querySelector('button.btn-search') ||
+                            document.querySelector('#btn-search');
+                if (btn) btn.click();
+            }
         """)
 
     def _launch_browser_session(self, port: Optional[int] = None):

@@ -137,7 +137,7 @@ jobs:
           retention-days: 1
 
   # -----------------------------------------------------------------
-  # TPEX 上櫃：10 個獨立 shard 矩陣並行；每 shard ~100 檔搭配錯峰啟動與自適應冷卻
+  # TPEX 上櫃：4 個獨立 shard 矩陣並行；每 shard ~250 檔搭配 15s 錯峰啟動與平穩極速採集
   # -----------------------------------------------------------------
   tpex-shards:
     name: TPEX-上櫃-分片-${{ matrix.shard }}
@@ -148,7 +148,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+        shard: [0, 1, 2, 3]
 
     steps:
       - name: 檢出專案代碼 (Checkout)
@@ -196,8 +196,8 @@ jobs:
           PYTHONUNBUFFERED: "1"
           TARGET_DATE: ${{ github.event.inputs.target_date || needs.pre-check.outputs.target_date }}
         run: |
-          # 錯峰啟動：各分片間隔啟動，避免瞬間併發脈衝衝擊 TPEX 後端
-          sleep $(( matrix.shard * 2 ))
+          # 錯峰啟動：各分片間隔 15 秒啟動，徹底避免瞬間併發脈衝衝擊 TPEX 後端
+          sleep $(( matrix.shard * 15 ))
 
           if [ -f "stock_crawler_coordinator.py" ]; then
             TARGET_SCRIPT="stock_crawler_coordinator.py"
@@ -206,9 +206,9 @@ jobs:
           fi
 
           if [ -n "$TARGET_DATE" ]; then
-            python "$TARGET_SCRIPT" --market tpex --date "$TARGET_DATE" --workers 1 --max-rounds 6 --shard-id ${{ matrix.shard }} --num-shards 10 --no-excel
+            python "$TARGET_SCRIPT" --market tpex --date "$TARGET_DATE" --workers 1 --max-rounds 6 --shard-id ${{ matrix.shard }} --num-shards 4 --no-excel
           else
-            python "$TARGET_SCRIPT" --market tpex --workers 1 --max-rounds 6 --shard-id ${{ matrix.shard }} --num-shards 10 --no-excel
+            python "$TARGET_SCRIPT" --market tpex --workers 1 --max-rounds 6 --shard-id ${{ matrix.shard }} --num-shards 4 --no-excel
           fi
 
       - name: 上傳 TPEX 分片產物 (Parquet 與 Log)
