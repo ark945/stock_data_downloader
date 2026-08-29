@@ -1,74 +1,39 @@
 """
-TPEX 雲端環境 (WARP 網絡加持) 診斷測試腳本
+TPEX 雲端環境 (WARP 網絡加持) 完整診斷與多檔連續採集測試腳本
 """
 import os
 import sys
 import time
 import json
-from DrissionPage import ChromiumPage, ChromiumOptions
+from tpex_crawler_cloud import TPEXCloudCrawler
 
-def test_tpex_under_warp():
+def test_tpex_single_and_batch():
     print("==========================================")
-    print("啟動 Chrome (WARP 消費者網絡環境)")
+    print("🚀 TPEX 雲端環境 (WARP 通道) 診斷測試啟動")
     print("==========================================")
-    co = ChromiumOptions()
-    co.set_paths(browser_path="/usr/bin/google-chrome")
-    co.set_argument("--lang=zh-TW")
-    co.set_argument("--no-sandbox")
-    co.set_argument("--disable-dev-shm-usage")
-    co.set_argument("--window-size=1920,1080")
-    co.headless(False)
-    
-    page = ChromiumPage(co)
-    page.listen.start("afterTrading/brokerBS")
-    page.get("https://www.tpex.org.tw/zh-tw/mainboard/trading/info/brokerBS.html")
-    
-    print("Page URL:", page.url)
-    print("Page Title:", page.title)
-    
-    tok0 = ""
-    for i in range(40):
-        t = page.run_js("""
-            if (typeof window.turnstile !== 'undefined' && window.turnstile.getResponse) {
-                const r = window.turnstile.getResponse();
-                if (r && r.length > 50) return r;
-            }
-            const el = document.querySelector('form.formblock input[name="cf-turnstile-response"]') || 
-                       document.querySelector('input[name="cf-turnstile-response"]');
-            return el ? (el.value || '') : '';
-        """)
-        if t and len(t) > 50:
-            tok0 = t
-            print(f"[WARP 加持成功！] Turnstile Token 簽發成功 at {i*0.5}s, len={len(t)}")
-            break
-        time.sleep(0.5)
-        
-    if not tok0:
-        print("[WARP 測試失敗] 未能取得 Token")
-        page.quit()
+
+    test_symbols = ["1240", "6488", "6117", "3293", "8069"]
+    trade_date = "2026-08-28"
+
+    crawler = TPEXCloudCrawler()
+    print(f"[*] 啟動 TPEXCloudCrawler 測試多檔連續採集: {test_symbols} (交易日: {trade_date})")
+    dfs, failed = crawler.crawl_stocks(test_symbols, trade_date)
+
+    print("\n==========================================")
+    print(f"📊 採集結果統計: 成功產出 {len(dfs)} 檔 DataFrame, 失敗 {len(failed)} 檔")
+    print("==========================================")
+
+    for i, df in enumerate(dfs, 1):
+        sym = df["symbol"].iloc[0] if not df.empty else "N/A"
+        print(f"  [{i}] 標的 {sym}: {len(df)} 筆明細, 欄位: {list(df.columns)}")
+
+    if failed:
+        print(f"[❌] 測試失敗！以下標的未成功取得: {failed}")
         return False
-
-    # 測試抓取 1240
-    print("\n--- 測試查詢標的 1240 ---")
-    code_el = page.ele("@name=code")
-    code_el.clear()
-    code_el.input("1240")
-    time.sleep(0.5)
-    
-    page.listen.clear()
-    q_btn = page.ele('css:form.formblock button[type="submit"]') or page.ele('css:div.tables-tools button[type="submit"]')
-    q_btn.click()
-    
-    pkt = page.listen.wait(timeout=25)
-    if pkt:
-        print("API 成功回應:", str(pkt.response.body)[:300])
-        page.quit()
-        return True
     else:
-        print("API 封包逾時")
-        page.quit()
-        return False
+        print(f"[✅] 測試圓滿成功！所有標的皆順暢抓取完成（含無成交自動略過），Turnstile 門禁與自癒機制運作正常！")
+        return True
 
 if __name__ == "__main__":
-    success = test_tpex_under_warp()
+    success = test_tpex_single_and_batch()
     sys.exit(0 if success else 1)
