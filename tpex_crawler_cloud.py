@@ -286,21 +286,20 @@ class TPEXCloudCrawler:
             return None
 
     # ---------------- 參數寬裕化配置 ----------------
-    TOKEN_TIMEOUT = 35          # 單檔等待 Turnstile Token 簽發上限 (秒)
-    PER_STOCK_TIMEOUT = 35      # 單檔等待 API JSON 回應封包上限 (秒)
-    INTER_STOCK_DELAY = 2.0     # 檔間平穩擬人間隔 (秒)
+    TOKEN_TIMEOUT = 15          # 單檔等待 Turnstile Token 簽發上限 (秒)
+    PER_STOCK_TIMEOUT = 25      # 單檔等待 API JSON 回應封包上限 (秒)
+    INTER_STOCK_DELAY = 1.5     # 檔間平穩擬人間隔 (秒)
     RELOAD_AFTER = 3            # 連續失敗 3 次觸發 Reload 頁面
     RESTART_AFTER = 6           # 連續失敗 6 次觸發重啟瀏覽器
     ABORT_AFTER = 20            # 連續失敗 20 次觸發安全熔斷
-    COOLDOWN_SEC = 30           # 重啟瀏覽器前冷卻秒數 (秒)
-    PAGE_READY_WAIT = 40        # 首頁 / 重載後等待 Token 簽發上限 (秒)
+    COOLDOWN_SEC = 20           # 重啟瀏覽器前冷卻秒數 (秒)
+    PAGE_READY_WAIT = 30        # 首頁 / 重載後等待 Token 簽發上限 (秒)
 
-    def _wait_token(self, page, timeout: int = 25, last_token: str = "") -> str:
-        """輪詢等待 Cloudflare Turnstile Token 生成就緒 (長度 > 50 且不同於上一個已用 Token)"""
+    def _wait_token(self, page, timeout: int = 15) -> str:
+        """輪詢等待 Cloudflare Turnstile Token 生成就緒 (長度 > 50)"""
         for i in range(int(timeout * 3)):
             try:
-                # 初始或每隔 6 次循環，主動喚醒 Turnstile 執行簽發
-                if i == 0 or i % 6 == 0:
+                if i == 0 or i % 5 == 0:
                     page.run_js("""
                         if (typeof window.turnstile !== 'undefined') {
                             try { if (window.turnstile.execute) window.turnstile.execute(); } catch(e){}
@@ -320,7 +319,7 @@ class TPEXCloudCrawler:
                                document.querySelector('[name*="turnstile"]');
                     return el ? (el.value || '') : '';
                 """)
-                if t and len(t) > 50 and t != last_token:
+                if t and len(t) > 50:
                     return t
             except Exception:
                 pass
@@ -345,17 +344,12 @@ class TPEXCloudCrawler:
         """)
 
     def _launch_browser_session(self, port: Optional[int] = None):
-        import random
         from DrissionPage import ChromiumPage, ChromiumOptions
-
-        temp_user_data = tempfile.mkdtemp()
-        actual_port = port if port is not None else random.randint(9300, 9850)
 
         if "DISPLAY" not in os.environ and os.name != "nt":
             os.environ["DISPLAY"] = ":99"
 
         co = ChromiumOptions()
-        co.set_local_port(actual_port)
         if sys.platform.startswith("linux"):
             for bin_p in ["/usr/bin/google-chrome", "/usr/bin/google-chrome-stable", "/usr/bin/chromium", "/usr/bin/chromium-browser"]:
                 if os.path.exists(bin_p):
@@ -366,29 +360,13 @@ class TPEXCloudCrawler:
         co.set_argument("--no-sandbox")
         co.set_argument("--disable-gpu")
         co.set_argument("--disable-dev-shm-usage")
-        co.set_argument("--disable-infobars")
         co.set_argument("--window-size=1920,1080")
-        co.set_argument("--disable-blink-features=AutomationControlled")
-        co.set_user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
-
-        co.set_user_data_path(temp_user_data)
 
         page = ChromiumPage(addr_or_opts=co)
-
-        try:
-            page.run_cdp("Page.addScriptToEvaluateOnNewDocument", source="""
-                Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
-                window.chrome = { runtime: {} };
-            """)
-        except Exception:
-            pass
-
-        # 精確過濾 TPEX 官方日報表 API 端點，杜絕 Google Analytics 等無關封包干擾
         page.listen.start("afterTrading/brokerBS")
-
         page.get(self.TPEX_URL, retry=3, timeout=30)
-        time.sleep(3.0)
-        return page, temp_user_data
+        time.sleep(4.0)
+        return page, None
 
     def crawl_stocks(
         self,
@@ -451,6 +429,10 @@ class TPEXCloudCrawler:
 
             for idx, sym in enumerate(stock_codes, 1):
                 try:
+                    # 0. 若非首檔，主動觸發 Turnstile 重置與執行簽發
+                    if idx > 1:
+                        page.run_js("if (window.turnstile) { try { window.turnstile.reset(); } catch(e){} try { window.turnstile.execute(); } catch(e){} }")
+
                     # 1. 檢查頁面健康度
                     try:
                         cur_url = page.url or ""
@@ -486,7 +468,7 @@ class TPEXCloudCrawler:
                     time.sleep(0.3)
 
                     # 3. 前置 Token 強檢門禁 (Pre-flight Token Guard)
-                    tok = self._wait_token(page, timeout=self.TOKEN_TIMEOUT, last_token=last_used_token)
+                    tok = self._wait_token(page, timeout=self.TOKEN_TIMEOUT)
                     ts_now = get_taipei_now().strftime("%H:%M:%S")
 
                     if not tok:

@@ -192,6 +192,7 @@ jobs:
         env:
           DISPLAY: ":99"
           PYTHONIOENCODING: "utf-8"
+          PYTHONUNBUFFERED: "1"
           TARGET_DATE: ${{ github.event.inputs.target_date || needs.pre-check.outputs.target_date }}
         run: |
           if [ -f "stock_crawler_coordinator.py" ]; then
