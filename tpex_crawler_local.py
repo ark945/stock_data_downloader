@@ -118,18 +118,20 @@ def _mp_local_worker_task(
                             }}
                         """)
 
-                        # 2. 換發全新 Turnstile Token (若未就緒則快速刷新確保)
+                        # 2. 換發全新 Turnstile Token (前置門禁防護)
                         token_ready = False
-                        for _ in range(20):
-                            time.sleep(0.08)
+                        current_tok = ""
+                        for _ in range(30):
+                            time.sleep(0.3)
                             tok = page.run_js("return document.querySelector('[name=cf-turnstile-response]') ? document.querySelector('[name=cf-turnstile-response]').value : '';")
                             if tok and len(tok) > 20:
                                 token_ready = True
+                                current_tok = tok
                                 break
 
                         if not token_ready:
-                            page.get(tpex_url, retry=2, timeout=20)
-                            time.sleep(1.2)
+                            page.get(tpex_url, retry=2, timeout=25)
+                            time.sleep(2.0)
                             page.run_js(f"""
                                 const inp = document.querySelector('input.code') || document.querySelector('[name=code]');
                                 if (inp) {{
@@ -138,28 +140,38 @@ def _mp_local_worker_task(
                                     inp.dispatchEvent(new Event('change', {{ bubbles: true }}));
                                 }}
                             """)
-                            for _ in range(30):
-                                time.sleep(0.08)
+                            for _ in range(40):
+                                time.sleep(0.3)
                                 tok = page.run_js("return document.querySelector('[name=cf-turnstile-response]') ? document.querySelector('[name=cf-turnstile-response]').value : '';")
                                 if tok and len(tok) > 20:
                                     token_ready = True
+                                    current_tok = tok
                                     break
+
+                        if not token_ready:
+                            # 嚴格守衛：無 Token 絕不發送
+                            if attempt < 3:
+                                time.sleep(1.5)
+                            continue
 
                         # 3. 清空監聽佇列並點擊查詢按鈕 (100% 精準觸發 formblock 內部)
                         page.listen.clear()
                         page.run_js("""
                             const btn = document.querySelector('div.formblock button[type="submit"]') || 
                                         document.querySelector('form.formblock button[type="submit"]') ||
-                                        Array.from(document.querySelectorAll('div.formblock button, form.formblock button')).find(b => (b.innerText||'').includes('查詢'));
+                                        Array.from(document.querySelectorAll('div.formblock button, form.formblock button, button, a')).find(b => (b.innerText||'').trim() === '查詢');
                             if (btn) btn.click();
                         """)
 
-                        pkt = page.listen.wait(timeout=6)
+                        pkt = page.listen.wait(timeout=25)
                         ts_res = datetime.now().strftime("%H:%M:%S")
+
+                        # 主動銷毀已送出之 Token
+                        page.run_js("const el = document.querySelector('[name=cf-turnstile-response]'); if (el) el.value = '';")
 
                         if not pkt:
                             if attempt < 3:
-                                time.sleep(0.8)
+                                time.sleep(1.0)
                             continue
 
                         body = None
@@ -188,6 +200,7 @@ def _mp_local_worker_task(
                                 else:
                                     print(f"[{ts_res}]   [Worker-{worker_id} {idx}/{worker_total}] [無成交/略過] {sym}")
                                 success_crawl = True
+                                time.sleep(1.5)
                                 break
                             elif str(body.get("status")) == "520" or "520" in str(body.get("title", "")):
                                 time.sleep(2.0 + attempt * 1.5)
@@ -195,15 +208,16 @@ def _mp_local_worker_task(
                             elif "stat" in body and ("查無" in body["stat"] or "無交易" in body["stat"] or "無符合" in body["stat"]):
                                 print(f"[{ts_res}]   [Worker-{worker_id} {idx}/{worker_total}] [無成交/略過] {sym}")
                                 success_crawl = True
+                                time.sleep(1.5)
                                 break
                             else:
                                 stat_msg = body.get("stat") or body.get("message") or str(body)[:50]
                                 # 遭遇非預期回應時刷新頁面重建連線
-                                page.get(tpex_url, retry=2, timeout=20)
-                                time.sleep(2.0)
+                                page.get(tpex_url, retry=2, timeout=25)
+                                time.sleep(2.5)
 
                         if attempt < 3:
-                            time.sleep(1.2)
+                            time.sleep(1.5)
 
                     except Exception as e:
                         # 發生瀏覽器連線斷開時，自動重啟瀏覽器

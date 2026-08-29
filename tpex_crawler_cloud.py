@@ -279,8 +279,50 @@ class TPEXCloudCrawler:
             print(f"[!] 解析 TPEX CSV 失敗 ({stock_id}): {e}")
             return None
 
+    # ---------------- 參數寬裕化配置 ----------------
+    TOKEN_TIMEOUT = 30          # 單檔等待 Turnstile Token 簽發上限 (秒)
+    PER_STOCK_TIMEOUT = 35      # 單檔等待 API JSON 回應封包上限 (秒)
+    INTER_STOCK_DELAY = 2.0     # 檔間平穩擬人間隔 (秒)
+    RELOAD_AFTER = 3            # 連續失敗 3 次觸發 Reload 頁面
+    RESTART_AFTER = 6           # 連續失敗 6 次觸發重啟瀏覽器
+    ABORT_AFTER = 20            # 連續失敗 20 次觸發安全熔斷
+    COOLDOWN_SEC = 30           # 重啟瀏覽器前冷卻秒數 (秒)
+    PAGE_READY_WAIT = 25        # 首頁 / 重載後等待 Token 簽發上限 (秒)
+
+    def _wait_token(self, page, timeout: int = 30, last_token: str = "") -> str:
+        """輪詢等待 Cloudflare Turnstile Token 生成就緒 (長度 > 20 且不同於上一個已用 Token)"""
+        for _ in range(int(timeout * 2.5)):
+            try:
+                t = page.run_js(
+                    "return (document.querySelector('input[name=\"cf-turnstile-response\"]') || {}).value || '';"
+                )
+                if t and len(t) > 20 and t != last_token:
+                    return t
+            except Exception:
+                pass
+            time.sleep(0.4)
+        return ""
+
+    def _clear_dom_token(self, page) -> None:
+        """主動銷毀 DOM 中已使用過的 Token，確保下一檔必須等待全新票券"""
+        try:
+            page.run_js("""
+                const el = document.querySelector('input[name="cf-turnstile-response"]');
+                if (el) el.value = '';
+            """)
+        except Exception:
+            pass
+
+    def _click_query(self, page) -> None:
+        """點擊查詢按鈕"""
+        page.run_js("""
+            const btn = document.querySelector('div.formblock button[type="submit"]') || 
+                        document.querySelector('form.formblock button[type="submit"]') ||
+                        Array.from(document.querySelectorAll('div.formblock button, form.formblock button, button, a')).find(b => (b.innerText||'').trim() === '查詢');
+            if (btn) btn.click();
+        """)
+
     def _launch_browser_session(self, port: Optional[int] = None):
-        import json
         import random
         from DrissionPage import ChromiumPage, ChromiumOptions
 
@@ -298,6 +340,7 @@ class TPEXCloudCrawler:
                     co.set_paths(browser_path=bin_p)
                     break
 
+        co.set_argument("--lang=zh-TW")
         co.set_argument("--no-sandbox")
         co.set_argument("--disable-gpu")
         co.set_argument("--disable-dev-shm-usage")
@@ -312,7 +355,7 @@ class TPEXCloudCrawler:
         page.listen.start(["afterTrading", "brokerBS"])
 
         page.get(self.TPEX_URL, retry=3, timeout=30)
-        time.sleep(2.5)
+        time.sleep(2.0)
         return page, temp_user_data
 
     def crawl_stocks(
@@ -320,7 +363,7 @@ class TPEXCloudCrawler:
         stock_codes: List[str],
         trade_date: str
     ) -> Tuple[List[pd.DataFrame], List[str]]:
-        """雲端單會話穩健抓取 (CDP 網路封包監聽架構)"""
+        """雲端單會話穩健抓取 (CDP 網路封包監聽架構 + 前置 Token 門禁守衛 + 階梯式自癒)"""
         import json
         if not stock_codes:
             return [], []
@@ -332,51 +375,53 @@ class TPEXCloudCrawler:
         temp_user_data = None
 
         last_used_token = ""
+        fail_streak = 0
         processed_symbols = set()
-        try:
-            print(f"[*] 正在啟動 TPEX 雲端單一持久化引擎 (CDP 封包監聽模式，待抓取: {total} 檔)...")
+
+        def restart_session():
+            nonlocal page, temp_user_data
+            if page:
+                try: page.quit()
+                except Exception: pass
+            if temp_user_data:
+                shutil.rmtree(temp_user_data, ignore_errors=True)
+            time.sleep(self.COOLDOWN_SEC)
             page, temp_user_data = self._launch_browser_session()
-            
-            # 確保瀏覽器首頁啟動後，首發 Token 100% 簽發就緒
-            token_ok = False
-            for _ in range(40):
-                time.sleep(0.1)
-                tok = page.run_js("return (document.querySelector('[name=cf-turnstile-response]') || {}).value || '';")
-                if tok and len(tok) > 20:
-                    token_ok = True
-                    break
-            
-            if not token_ok:
-                page.get(self.TPEX_URL, retry=2, timeout=20)
-                for _ in range(40):
-                    time.sleep(0.1)
-                    tok = page.run_js("return (document.querySelector('[name=cf-turnstile-response]') || {}).value || '';")
-                    if tok and len(tok) > 20: break
+            tok_init = self._wait_token(page, timeout=self.PAGE_READY_WAIT)
+            if not tok_init:
+                page.get(self.TPEX_URL, retry=2, timeout=30)
+                self._wait_token(page, timeout=self.PAGE_READY_WAIT)
+
+        try:
+            print(f"[*] 正在啟動 TPEX 雲端持久化引擎 (CDP 封包監聽 + Token 門禁防禦，待抓取: {total} 檔)...")
+            page, temp_user_data = self._launch_browser_session()
+
+            # 確保首頁首發 Token 100% 簽發就緒
+            tok0 = self._wait_token(page, timeout=self.PAGE_READY_WAIT)
+            if not tok0:
+                print("[!] 首次 Token 簽發未就緒，正在重新載入首頁...")
+                page.get(self.TPEX_URL, retry=2, timeout=30)
+                tok0 = self._wait_token(page, timeout=self.PAGE_READY_WAIT)
+                if not tok0:
+                    print("[!] 警告：首次 Token 仍未取得，將由單檔前置守衛負責即時攔截與自癒。")
 
             start_t = time.time()
 
             for idx, sym in enumerate(stock_codes, 1):
                 try:
-                    # 方案 A (僅雲端版)：每 10 檔原地同步重新整理首頁，換發全新 Token (Token 年齡永遠 < 20 秒，絕不觸發逾時)
-                    if idx > 1 and (idx - 1) % 10 == 0:
-                        page.get(self.TPEX_URL, retry=2, timeout=20)
-                        for _ in range(40):
-                            time.sleep(0.08)
-                            tok = page.run_js("return (document.querySelector('[name=cf-turnstile-response]') || {}).value || '';")
-                            if tok and len(tok) > 20 and tok != last_used_token:
-                                break
+                    # 1. 檢查頁面健康度
+                    try:
+                        cur_url = page.url or ""
+                        cur_title = page.title or ""
+                    except Exception:
+                        cur_url, cur_title = "", ""
 
-                    cur_url = page.url or ""
-                    cur_title = page.title or ""
                     if "brokerBS.html" not in cur_url or "520" in cur_title or "Error" in cur_title or "unknown error" in cur_title:
-                        page.get(self.TPEX_URL, retry=3, timeout=25)
-                        time.sleep(2.0)
+                        print(f"[*] 偵測到頁面偏離或異常 ({cur_url})，正在重新導向目標頁面...")
+                        page.get(self.TPEX_URL, retry=3, timeout=30)
+                        self._wait_token(page, timeout=self.PAGE_READY_WAIT)
 
-                    # 1. 確保在目標頁面並輸入代碼
-                    if "brokerBS.html" not in (page.url or "") or "search.html" in (page.url or ""):
-                        page.get(self.TPEX_URL, retry=2, timeout=20)
-                        time.sleep(1.2)
-
+                    # 2. 填入股票代碼
                     page.run_js(f"""
                         const inp = document.querySelector('input.code') || document.querySelector('[name=code]');
                         if (inp) {{
@@ -386,54 +431,52 @@ class TPEXCloudCrawler:
                         }}
                     """)
 
-                    # 2. 換發全新 Turnstile Token (確保非空且非已被作廢的舊票)
-                    token_ready = False
-                    current_token = ""
-                    for _ in range(25):
-                        time.sleep(0.08)
-                        current_token = page.run_js("return (document.querySelector('[name=cf-turnstile-response]') || {}).value || '';")
-                        if current_token and len(current_token) > 20:
-                            token_ready = True
+                    # 3. 前置 Token 強檢門禁 (Pre-flight Token Guard)
+                    tok = self._wait_token(page, timeout=self.TOKEN_TIMEOUT, last_token=last_used_token)
+                    ts_now = get_taipei_now().strftime("%H:%M:%S")
+
+                    if not tok:
+                        failed_symbols.append(sym)
+                        fail_streak += 1
+                        print(f"[{ts_now}]   [上櫃 {idx}/{total}] [未取得有效 Token (安全攔截未送出)] {sym} (連續失敗: {fail_streak})")
+
+                        # 階梯自癒
+                        if fail_streak >= self.ABORT_AFTER:
+                            print(f"[!] 連續失敗達 {fail_streak} 次，觸發安全熔斷中止本輪。")
                             break
+                        elif fail_streak >= self.RESTART_AFTER:
+                            print(f"[*] 連續失敗達 {fail_streak} 次，正在重啟 Chromium 瀏覽器並冷卻 {self.COOLDOWN_SEC} 秒...")
+                            restart_session()
+                            fail_streak = 0
+                            last_used_token = ""
+                        elif fail_streak >= self.RELOAD_AFTER:
+                            print(f"[*] 連續失敗達 {fail_streak} 次，正在重新整理首頁重取 Token...")
+                            page.get(self.TPEX_URL, retry=2, timeout=30)
+                            self._wait_token(page, timeout=self.PAGE_READY_WAIT)
+                            last_used_token = ""
+                        continue
 
-                    if not token_ready:
-                        page.get(self.TPEX_URL, retry=2, timeout=20)
-                        time.sleep(1.2)
-                        page.run_js(f"""
-                            const inp = document.querySelector('input.code') || document.querySelector('[name=code]');
-                            if (inp) {{
-                                inp.value = '{sym}';
-                                inp.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                                inp.dispatchEvent(new Event('change', {{ bubbles: true }}));
-                            }}
-                        """)
-                        for _ in range(35):
-                            time.sleep(0.08)
-                            current_token = page.run_js("return (document.querySelector('[name=cf-turnstile-response]') || {}).value || '';")
-                            if current_token and len(current_token) > 20:
-                                token_ready = True
-                                break
-
-                    # 3. 清空監聽佇列並點擊查詢按鈕 (100% 精準觸發 formblock 內部)
+                    # 4. 清空監聽佇列並點擊查詢按鈕
                     page.listen.clear()
-                    page.run_js("""
-                        const btn = document.querySelector('div.formblock button[type="submit"]') || 
-                                    document.querySelector('form.formblock button[type="submit"]') ||
-                                    Array.from(document.querySelectorAll('div.formblock button, form.formblock button')).find(b => (b.innerText||'').includes('查詢'));
-                        if (btn) btn.click();
-                    """)
+                    self._click_query(page)
 
-                    pkt = page.listen.wait(timeout=6)
+                    # 5. 監聽 API 網路封包
+                    pkt = page.listen.wait(timeout=self.PER_STOCK_TIMEOUT)
                     ts_res = get_taipei_now().strftime("%H:%M:%S")
 
                     if not pkt:
                         failed_symbols.append(sym)
-                        print(f"[{ts_res}]   [上櫃 {idx}/{total}] [封包逾時] {sym}")
-                        page.get(self.TPEX_URL, retry=2, timeout=20)
-                        for _ in range(30):
-                            time.sleep(0.08)
-                            tok = page.run_js("return (document.querySelector('[name=cf-turnstile-response]') || {}).value || '';")
-                            if tok and len(tok) > 20: break
+                        fail_streak += 1
+                        print(f"[{ts_res}]   [上櫃 {idx}/{total}] [API 封包逾時] {sym} (連續失敗: {fail_streak})")
+                        self._clear_dom_token(page)
+                        if fail_streak >= self.RESTART_AFTER:
+                            restart_session()
+                            fail_streak = 0
+                            last_used_token = ""
+                        elif fail_streak >= self.RELOAD_AFTER:
+                            page.get(self.TPEX_URL, retry=2, timeout=30)
+                            self._wait_token(page, timeout=self.PAGE_READY_WAIT)
+                            last_used_token = ""
                         continue
 
                     body = None
@@ -461,43 +504,73 @@ class TPEXCloudCrawler:
                                 print(f"[{ts_res}]   [上櫃 {idx}/{total}] [OK] {sym} ({len(df)} 筆) | 速度: {speed:.2f} 檔/s | 剩餘約: {remain/60:.1f} 分鐘")
                             else:
                                 print(f"[{ts_res}]   [上櫃 {idx}/{total}] [無成交明細/略過] {sym}")
-                            time.sleep(1.5)  # 擬人化節奏冷卻 1.5 秒，避免觸發 Cloudflare 突發頻率限制
+
+                            # 成功：記錄已用 Token、清空 DOM、重置失敗計數、擬人平穩節流
+                            last_used_token = tok
+                            self._clear_dom_token(page)
+                            fail_streak = 0
+                            time.sleep(self.INTER_STOCK_DELAY)
+
                         elif str(body.get("status")) == "520" or "520" in str(body.get("title", "")):
                             failed_symbols.append(sym)
-                            print(f"[{ts_res}]   [上櫃 {idx}/{total}] [CF 520 阻擋] {sym}")
-                            page.get(self.TPEX_URL, retry=2, timeout=20)
-                            for _ in range(35):
-                                time.sleep(0.08)
-                                tok = page.run_js("return (document.querySelector('[name=cf-turnstile-response]') || {}).value || '';")
-                                if tok and len(tok) > 20: break
+                            fail_streak += 1
+                            print(f"[{ts_res}]   [上櫃 {idx}/{total}] [CF 520 阻擋] {sym} (連續失敗: {fail_streak})")
+                            self._clear_dom_token(page)
+                            time.sleep(2.0 + fail_streak * 1.5)
+                            if fail_streak >= self.RELOAD_AFTER:
+                                page.get(self.TPEX_URL, retry=2, timeout=30)
+                                self._wait_token(page, timeout=self.PAGE_READY_WAIT)
+                                last_used_token = ""
+
                         elif "stat" in body and ("查無" in body["stat"] or "無交易" in body["stat"] or "無符合" in body["stat"]):
                             print(f"[{ts_res}]   [上櫃 {idx}/{total}] [無成交/略過] {sym}")
-                            time.sleep(1.5)  # 擬人化節奏冷卻 1.5 秒
+                            last_used_token = tok
+                            self._clear_dom_token(page)
+                            fail_streak = 0
+                            time.sleep(self.INTER_STOCK_DELAY)
+
                         else:
                             failed_symbols.append(sym)
+                            fail_streak += 1
                             stat_msg = body.get("stat") or body.get("message") or str(body)[:60]
-                            print(f"[{ts_res}]   [上櫃 {idx}/{total}] [非預期回應: {stat_msg}] {sym}")
-                            last_used_token = current_token  # 記錄該無效 Token，避免下檔重複拿廢票
-                            # 嚴格執行同步重載，並死等全新 Token 產生
-                            page.get(self.TPEX_URL, retry=2, timeout=20)
-                            for _ in range(35):
-                                time.sleep(0.08)
-                                tok = page.run_js("return (document.querySelector('[name=cf-turnstile-response]') || {}).value || '';")
-                                if tok and len(tok) > 20 and tok != last_used_token:
-                                    break
+                            print(f"[{ts_res}]   [上櫃 {idx}/{total}] [非預期回應: {stat_msg}] {sym} (連續失敗: {fail_streak})")
+                            last_used_token = tok
+                            self._clear_dom_token(page)
+
+                            if fail_streak >= self.ABORT_AFTER:
+                                print(f"[!] 連續失敗達 {fail_streak} 次，觸發安全熔斷中止本輪。")
+                                break
+                            elif fail_streak >= self.RESTART_AFTER:
+                                print(f"[*] 連續失敗達 {fail_streak} 次，正在重啟 Chromium 瀏覽器並冷卻 {self.COOLDOWN_SEC} 秒...")
+                                restart_session()
+                                fail_streak = 0
+                                last_used_token = ""
+                            elif fail_streak >= self.RELOAD_AFTER:
+                                print(f"[*] 連續失敗達 {fail_streak} 次，正在重新整理首頁重取 Token...")
+                                page.get(self.TPEX_URL, retry=2, timeout=30)
+                                self._wait_token(page, timeout=self.PAGE_READY_WAIT)
+                                last_used_token = ""
+                            else:
+                                time.sleep(2.0)
                     else:
                         failed_symbols.append(sym)
-                        print(f"[{ts_res}]   [上櫃 {idx}/{total}] [解析失敗] {sym}")
-                        page.get(self.TPEX_URL, retry=2, timeout=20)
-                        for _ in range(30):
-                            time.sleep(0.08)
-                            tok = page.run_js("return (document.querySelector('[name=cf-turnstile-response]') || {}).value || '';")
-                            if tok and len(tok) > 20: break
+                        fail_streak += 1
+                        print(f"[{ts_res}]   [上櫃 {idx}/{total}] [解析失敗] {sym} (連續失敗: {fail_streak})")
+                        self._clear_dom_token(page)
+                        if fail_streak >= self.RELOAD_AFTER:
+                            page.get(self.TPEX_URL, retry=2, timeout=30)
+                            self._wait_token(page, timeout=self.PAGE_READY_WAIT)
+                            last_used_token = ""
 
                 except Exception as e:
                     ts_err = get_taipei_now().strftime("%H:%M:%S")
                     failed_symbols.append(sym)
+                    fail_streak += 1
                     print(f"[{ts_err}]   [上櫃 {idx}/{total}] [異常] {sym} ({e})")
+                    if "Disconnected" in str(type(e)) or "Connection" in str(type(e)):
+                        restart_session()
+                        fail_streak = 0
+                        last_used_token = ""
                 finally:
                     processed_symbols.add(sym)
 
@@ -522,10 +595,10 @@ class TPEXCloudCrawler:
         self,
         stock_codes: List[str],
         trade_date: str,
-        max_rounds: int = 2,
-        cooldown_sec: int = 10
+        max_rounds: int = 3,
+        cooldown_sec: int = 20
     ) -> Tuple[List[pd.DataFrame], List[str]]:
-        """雲端多輪自適應安全補抓機制 (針對 CF 520 / 逾時進行第 2 輪補抓)"""
+        """雲端多輪自適應安全補抓機制 (針對 CF 520 / 逾時進行多輪安全補抓)"""
         all_dfs = []
         pending_symbols = list(stock_codes)
 
