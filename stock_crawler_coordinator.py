@@ -235,6 +235,11 @@ def run_full_market_crawler(
     # 3. 聚合全市場資料並輸出
     if not collected_dfs:
         log_msg("[!] 警告：本次執行未取得任何有效分點資料！")
+        if all_failed_items:
+            log_msg(f"[!] 嚴格品質檢查：本分片共有 {len(all_failed_items)} 檔失敗，判定本節點失敗！")
+            for itm in all_failed_items:
+                log_msg(f"    - {itm['symbol']} ({itm['name']}): {itm['reason']}")
+            raise RuntimeError(f"分片採集未達 100% 成功，共 {len(all_failed_items)} 檔失敗。")
         return
 
     log_msg(">>> [數據整合] 彙整分點資料中...")

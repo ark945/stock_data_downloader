@@ -325,21 +325,24 @@ class TPEXCloudCrawler:
     PAGE_READY_WAIT = 15        # 首頁 / 重載後等待 Token 簽發上限 (秒)
 
     def _click_query(self, page) -> None:
-        """精準點擊 form.formblock 日報表查詢按鈕"""
-        q_btn = page.ele('css:form.formblock button[type="submit"]') or page.ele('css:div.tables-tools button[type="submit"]') or page.ele('css:.btn-query')
-        if q_btn:
-            try:
-                q_btn.click()
-                return
-            except Exception:
-                pass
-        page.run_js("""
-            const btn = document.querySelector('form.formblock button[type="submit"]') || 
-                        document.querySelector('div.tables-tools button[type="submit"]') ||
-                        document.querySelector('div.formblock button[type="submit"]') ||
-                        Array.from(document.querySelectorAll('button')).find(b => (b.innerText||'').trim() === '查詢');
-            if (btn) btn.click();
-        """)
+        """精準提交表單 (標準 form.requestSubmit + 按鈕點擊雙重保險)"""
+        try:
+            page.run_js("""
+                const form = document.querySelector('form#tables-form') || document.querySelector('form.formblock') || document.querySelector('form');
+                if (form && typeof form.requestSubmit === 'function') {
+                    form.requestSubmit();
+                } else {
+                    const btn = document.querySelector('form.formblock button[type="submit"]') || 
+                                document.querySelector('div.tables-tools button[type="submit"]') ||
+                                document.querySelector('button[type="submit"]');
+                    if (btn) btn.click();
+                }
+            """)
+        except Exception:
+            q_btn = page.ele('css:form.formblock button[type="submit"]') or page.ele('css:button[type="submit"]')
+            if q_btn:
+                try: q_btn.click()
+                except Exception: pass
 
     def _launch_browser_session(self, port: Optional[int] = None):
         from DrissionPage import ChromiumPage, ChromiumOptions
@@ -545,17 +548,17 @@ class TPEXCloudCrawler:
                                 break
 
                             elif "stat" in body and ("操作逾時" in str(body["stat"]) or "真人驗證" in str(body["stat"])):
+                                stat_reason = body.get("stat")
                                 if attempt == 0:
-                                    print(f"[{ts_res}]   [上櫃 {idx}/{total}] [TPEX 會話逾時 -> 即刻刷新頁面自癒] {sym}")
+                                    print(f"[{ts_res}]   [上櫃 {idx}/{total}] [TPEX 會話逾時 -> 即刻刷新頁面自癒] {sym} (原因: {stat_reason})")
                                     page.get(self.TPEX_URL, retry=2, timeout=30)
-                                    time.sleep(3.0)
+                                    time.sleep(2.0)
                                     self._wait_token(page, timeout=self.PAGE_READY_WAIT)
-                                    time.sleep(1.0)
                                     continue
                                 else:
                                     failed_symbols.append(sym)
                                     fail_streak += 1
-                                    print(f"[{ts_res}]   [上櫃 {idx}/{total}] [TPEX 操作逾時] {sym} (連續失敗: {fail_streak})")
+                                    print(f"[{ts_res}]   [上櫃 {idx}/{total}] [TPEX 操作逾時] {sym} (原因: {stat_reason}, 連續失敗: {fail_streak})")
                                     break
 
                             elif str(body.get("status")) == "520" or "520" in str(body.get("title", "")):
