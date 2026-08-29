@@ -199,7 +199,9 @@ def run_full_market_crawler(
                 "market": "TWSE",
                 "reason": f"達第 {r_exec} 輪重試上限"
             })
-        log_msg(f"[✓] TWSE 上市抓取完成：成功 {len(twse_dfs)} 檔，未產出 {len(twse_failed)} 檔")
+        twse_total_assigned = len(twse_symbols)
+        twse_zero_vol = twse_total_assigned - len(twse_dfs) - len(twse_failed)
+        log_msg(f"[✓] TWSE 上市採集完成：共分配 {twse_total_assigned} 檔 | 有效成交產出: {len(twse_dfs)} 檔 | 無成交/略過: {twse_zero_vol} 檔 | 失敗: {len(twse_failed)} 檔")
 
     # 2. 抓取上櫃 (TPEX)
     if markets in ["all", "tpex"]:
@@ -208,7 +210,6 @@ def run_full_market_crawler(
         if num_shards > 1:
             tpex_symbols = [s for i, s in enumerate(tpex_symbols) if i % num_shards == shard_id]
         total_target_count += len(tpex_symbols)
-        log_msg(f"[*] 取得上櫃標的清單: {len(tpex_symbols)} 檔 (分片 {shard_id + 1}/{num_shards})")
         
         tpex_crawler = TPEXBrokerCrawler()
         tpex_dfs, tpex_failed = tpex_crawler.crawl_stocks_with_retry(
@@ -227,7 +228,9 @@ def run_full_market_crawler(
                 "reason": "上櫃無資料或下載逾時"
             })
             
-        log_msg(f"[✓] TPEX 上櫃抓取完成：成功 {len(tpex_dfs)} 檔，未產出 {len(tpex_failed)} 檔")
+        tpex_total_assigned = len(tpex_symbols)
+        tpex_zero_vol = tpex_total_assigned - len(tpex_dfs) - len(tpex_failed)
+        log_msg(f"[✓] TPEX 上櫃採集完成：共分配 {tpex_total_assigned} 檔 | 有效成交產出: {len(tpex_dfs)} 檔 | 無成交/略過: {tpex_zero_vol} 檔 | 失敗: {len(tpex_failed)} 檔")
 
     # 3. 聚合全市場資料並輸出
     if not collected_dfs:
