@@ -1,10 +1,16 @@
+"""
+TPEX 雲端環境 (WARP 網絡加持) 診斷測試腳本
+"""
 import os
 import sys
 import time
 import json
 from DrissionPage import ChromiumPage, ChromiumOptions
 
-def inspect_turnstile_full():
+def test_tpex_under_warp():
+    print("==========================================")
+    print("啟動 Chrome (WARP 消費者網絡環境)")
+    print("==========================================")
     co = ChromiumOptions()
     co.set_paths(browser_path="/usr/bin/google-chrome")
     co.set_argument("--lang=zh-TW")
@@ -14,68 +20,55 @@ def inspect_turnstile_full():
     co.headless(False)
     
     page = ChromiumPage(co)
+    page.listen.start("afterTrading/brokerBS")
     page.get("https://www.tpex.org.tw/zh-tw/mainboard/trading/info/brokerBS.html")
-    time.sleep(5)
     
-    print("=== 1. Inspecting all Iframes & Shadows ===")
-    iframes_info = page.run_js("""
-        const iframes = Array.from(document.querySelectorAll('iframe'));
-        return iframes.map((f, i) => {
-            return {
-                index: i,
-                src: f.src,
-                id: f.id,
-                name: f.name,
-                rect: { w: f.offsetWidth, h: f.offsetHeight, x: f.offsetLeft, y: f.offsetTop },
-                style: f.getAttribute('style')
-            };
-        });
-    """)
-    print("Iframes:", json.dumps(iframes_info, ensure_ascii=False, indent=2))
+    print("Page URL:", page.url)
+    print("Page Title:", page.title)
     
-    # 搜尋所有可能是 turnstile / cloudflare 的元素
-    cf_elements = page.run_js("""
-        const els = Array.from(document.querySelectorAll('div, iframe, input')).filter(e => {
-            const str = (e.id + ' ' + e.className + ' ' + (e.getAttribute('name')||'')).toLowerCase();
-            return str.includes('turnstile') || str.includes('cf-') || str.includes('challenge');
-        });
-        return els.map(e => ({
-            tag: e.tagName,
-            id: e.id,
-            className: e.className,
-            name: e.getAttribute('name'),
-            innerHTML: e.innerHTML.slice(0, 150),
-            rect: { w: e.offsetWidth, h: e.offsetHeight }
-        }));
-    """)
-    print("CF Elements:", json.dumps(cf_elements, ensure_ascii=False, indent=2))
+    tok0 = ""
+    for i in range(40):
+        t = page.run_js("""
+            if (typeof window.turnstile !== 'undefined' && window.turnstile.getResponse) {
+                const r = window.turnstile.getResponse();
+                if (r && r.length > 50) return r;
+            }
+            const el = document.querySelector('form.formblock input[name="cf-turnstile-response"]') || 
+                       document.querySelector('input[name="cf-turnstile-response"]');
+            return el ? (el.value || '') : '';
+        """)
+        if t and len(t) > 50:
+            tok0 = t
+            print(f"[WARP 加持成功！] Turnstile Token 簽發成功 at {i*0.5}s, len={len(t)}")
+            break
+        time.sleep(0.5)
+        
+    if not tok0:
+        print("[WARP 測試失敗] 未能取得 Token")
+        page.quit()
+        return False
+
+    # 測試抓取 1240
+    print("\n--- 測試查詢標的 1240 ---")
+    code_el = page.ele("@name=code")
+    code_el.clear()
+    code_el.input("1240")
+    time.sleep(0.5)
     
-    # 嘗試尋找 DrissionPage 中的 iframe 物件並點擊（如果需要點擊 checkbox）
-    for ifr in page.eles('tag:iframe'):
-        print("Found DrissionPage iframe:", ifr.attrs)
-        try:
-            # 嘗試檢查 iframe 內部元素
-            box = ifr.ele('tag:input') or ifr.ele('tag:span') or ifr.ele('css:.ctp-checkbox-label')
-            print("Element inside iframe:", box)
-            if box:
-                print("Clicking element inside iframe...")
-                box.click()
-        except Exception as e:
-            print("Error checking iframe content:", e)
-            
-    time.sleep(5)
+    page.listen.clear()
+    q_btn = page.ele('css:form.formblock button[type="submit"]') or page.ele('css:div.tables-tools button[type="submit"]')
+    q_btn.click()
     
-    # 再次檢查 Token
-    tok = page.run_js("""
-        if (typeof window.turnstile !== 'undefined' && window.turnstile.getResponse) {
-            const r = window.turnstile.getResponse();
-            if (r) return r;
-        }
-        const el = document.querySelector('input[name="cf-turnstile-response"]');
-        return el ? el.value : '';
-    """)
-    print(f"Token after iframe interaction: len={len(tok)}")
-    page.quit()
+    pkt = page.listen.wait(timeout=25)
+    if pkt:
+        print("API 成功回應:", str(pkt.response.body)[:300])
+        page.quit()
+        return True
+    else:
+        print("API 封包逾時")
+        page.quit()
+        return False
 
 if __name__ == "__main__":
-    inspect_turnstile_full()
+    success = test_tpex_under_warp()
+    sys.exit(0 if success else 1)
