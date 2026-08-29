@@ -542,20 +542,20 @@ class TPEXCloudCrawler:
                                 stock_success = True
                                 break
 
-                            elif "stat" in body and any(kw in str(body["stat"]) for kw in ["操作逾時", "重新整理", "真人驗證"]):
+                            elif "stat" in body and ("查無" in str(body["stat"]) or "無交易" in str(body["stat"]) or "無符合" in str(body["stat"])):
+                                print(f"[{ts_res}]   [上櫃 {idx}/{total}] [無成交/略過] {sym}")
+                                fail_streak = 0
+                                time.sleep(self.INTER_STOCK_DELAY)
+                                stock_success = True
+                                break
+
+                            elif "stat" in body and ("操作逾時" in str(body["stat"]) or "真人驗證" in str(body["stat"])):
                                 print(f"[{ts_res}]   [上櫃 {idx}/{total}] [TPEX 會話逾時 -> 即刻刷新頁面自癒] {sym}")
                                 page.get(self.TPEX_URL, retry=2, timeout=30)
                                 time.sleep(3.0)
                                 self._wait_token(page, timeout=self.PAGE_READY_WAIT)
                                 time.sleep(1.0)
                                 continue
-
-                            elif "stat" in body and ("查無" in body["stat"] or "無交易" in body["stat"] or "無符合" in body["stat"]):
-                                print(f"[{ts_res}]   [上櫃 {idx}/{total}] [無成交/略過] {sym}")
-                                fail_streak = 0
-                                time.sleep(self.INTER_STOCK_DELAY)
-                                stock_success = True
-                                break
 
                             elif str(body.get("status")) == "520" or "520" in str(body.get("title", "")):
                                 if attempt == 0:
