@@ -417,12 +417,17 @@ class TPEXCloudCrawler:
 
             for idx, sym in enumerate(stock_codes, 1):
                 try:
-                    # 每處理 20 檔主動刷新一次首頁以重置 TPEX Session (防後端 5~7 分鐘操作逾時)
-                    if idx > 1 and (idx - 1) % 20 == 0:
+                    # 每處理 15 檔主動清除 Cookie 並重置 TPEX Session (防後端 20~25 檔請求逾時限制)
+                    if idx > 1 and (idx - 1) % 15 == 0:
+                        page.run_js("""
+                            document.cookie.split(";").forEach(function(c) {
+                                document.cookie = c.replace(/^ +/, "").replace(/=.*/, "=;expires=" + new Date().toUTCString() + ";path=/");
+                            });
+                        """)
                         page.get(self.TPEX_URL, retry=3, timeout=30)
-                        time.sleep(3.0)
+                        time.sleep(2.0)
                         self._wait_token(page, timeout=self.PAGE_READY_WAIT)
-                        time.sleep(1.0)
+                        last_used_token = ""
                     elif idx > 1:
                         # 檔間主動觸發 Turnstile 安全重置並清空 input 殘留舊值
                         page.run_js("""
@@ -440,9 +445,8 @@ class TPEXCloudCrawler:
                     if "brokerBS.html" not in cur_url or "520" in cur_title or "Error" in cur_title or "unknown error" in cur_title or "search.html" in cur_url:
                         print(f"[*] 偵測到頁面偏離或異常 ({cur_url})，正在導回目標日報表頁面...")
                         page.get(self.TPEX_URL, retry=3, timeout=30)
-                        time.sleep(3.0)
-                        self._wait_token(page, timeout=self.PAGE_READY_WAIT)
                         time.sleep(2.0)
+                        self._wait_token(page, timeout=self.PAGE_READY_WAIT)
 
                     # 2. 填入股票代碼與查詢 (支援單檔遇逾時原地重試 1 次)
                     stock_success = False
@@ -473,7 +477,7 @@ class TPEXCloudCrawler:
                         if not tok:
                             if attempt == 0:
                                 page.get(self.TPEX_URL, retry=2, timeout=30)
-                                time.sleep(3.0)
+                                time.sleep(2.0)
                                 self._wait_token(page, timeout=self.PAGE_READY_WAIT)
                                 continue
                             else:
@@ -493,7 +497,7 @@ class TPEXCloudCrawler:
                         if not pkt:
                             if attempt == 0:
                                 page.get(self.TPEX_URL, retry=2, timeout=30)
-                                time.sleep(3.0)
+                                time.sleep(2.0)
                                 self._wait_token(page, timeout=self.PAGE_READY_WAIT)
                                 continue
                             else:
@@ -502,17 +506,18 @@ class TPEXCloudCrawler:
                                 print(f"[{ts_res}]   [上櫃 {idx}/{total}] [API 封包逾時] {sym} (連續失敗: {fail_streak})")
                                 break
 
-                        body = None
+                        # 解析 API JSON 回應
+                        raw = pkt.response.body
                         try:
-                            raw = pkt.response.body
-                            if isinstance(raw, (bytes, bytearray)):
-                                raw = raw.decode("utf-8", errors="replace")
-                            if isinstance(raw, str):
-                                raw = raw.strip()
-                                if raw.startswith("{") and raw.endswith("}"):
+                            if isinstance(raw, (bytes, str)):
+                                if isinstance(raw, bytes):
+                                    raw = raw.decode("utf-8", errors="ignore")
+                                if raw.strip().startswith("{") or raw.strip().startswith("["):
                                     body = json.loads(raw)
                             elif isinstance(raw, dict):
                                 body = raw
+                            else:
+                                body = None
                         except Exception:
                             body = None
 
@@ -545,10 +550,16 @@ class TPEXCloudCrawler:
                             elif "stat" in body and ("操作逾時" in str(body["stat"]) or "真人驗證" in str(body["stat"])):
                                 stat_reason = body.get("stat")
                                 if attempt == 0:
-                                    print(f"[{ts_res}]   [上櫃 {idx}/{total}] [TPEX 會話逾時 -> 即刻刷新頁面自癒] {sym} (原因: {stat_reason})")
+                                    print(f"[{ts_res}]   [上櫃 {idx}/{total}] [TPEX 會話逾時 -> 即刻清除Cookie刷新頁面自癒] {sym} (原因: {stat_reason})")
+                                    page.run_js("""
+                                        document.cookie.split(";").forEach(function(c) {
+                                            document.cookie = c.replace(/^ +/, "").replace(/=.*/, "=;expires=" + new Date().toUTCString() + ";path=/");
+                                        });
+                                    """)
                                     page.get(self.TPEX_URL, retry=2, timeout=30)
                                     time.sleep(2.0)
                                     self._wait_token(page, timeout=self.PAGE_READY_WAIT)
+                                    last_used_token = ""
                                     continue
                                 else:
                                     failed_symbols.append(sym)
