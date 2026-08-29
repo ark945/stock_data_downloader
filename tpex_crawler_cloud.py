@@ -285,8 +285,8 @@ class TPEXCloudCrawler:
             print(f"[!] 解析 TPEX CSV 失敗 ({stock_id}): {e}")
             return None
 
-    def _wait_token(self, page, timeout: float = 12.0) -> str:
-        """強韌等待並提取 Cloudflare Turnstile 授權 Token"""
+    def _wait_token(self, page, last_tok: str = "", timeout: float = 12.0) -> str:
+        """強韌等待並提取 Cloudflare Turnstile 全新授權 Token (嚴格防重用)"""
         for i in range(int(timeout * 2)):
             try:
                 t = page.run_js("""
@@ -299,15 +299,18 @@ class TPEXCloudCrawler:
                                document.querySelector('[name*="turnstile"]');
                     return el ? (el.value || '') : '';
                 """)
-                if t and len(t) > 50:
+                if t and len(t) > 50 and t != last_tok:
                     return t
 
                 # 若 1.5 秒內未主動簽發，觸發 execute
                 if i == 3:
                     page.run_js("if (window.turnstile && window.turnstile.execute) { try { window.turnstile.execute(); } catch(e){} }")
-                # 若 6 秒內仍未生成，執行安全重置
+                # 若 6 秒內仍未生成，執行安全重置並清空 input
                 elif i == 12:
-                    page.run_js("if (window.turnstile) { try { window.turnstile.reset(); } catch(e){} try { window.turnstile.execute(); } catch(e){} }")
+                    page.run_js("""
+                        if (window.turnstile) { try { window.turnstile.reset(); } catch(e){} try { window.turnstile.execute(); } catch(e){} }
+                        document.querySelectorAll('input[name="cf-turnstile-response"]').forEach(el => el.value = '');
+                    """)
             except Exception:
                 pass
             time.sleep(0.5)
@@ -433,8 +436,11 @@ class TPEXCloudCrawler:
                         self._wait_token(page, timeout=self.PAGE_READY_WAIT)
                         time.sleep(1.0)
                     elif idx > 1:
-                        # 檔間主動觸發 Turnstile 安全重置
-                        page.run_js("if (window.turnstile) { try { window.turnstile.reset(); } catch(e){} }")
+                        # 檔間主動觸發 Turnstile 安全重置並清空 input 殘留舊值
+                        page.run_js("""
+                            if (window.turnstile) { try { window.turnstile.reset(); } catch(e){} }
+                            document.querySelectorAll('input[name="cf-turnstile-response"]').forEach(el => el.value = '');
+                        """)
 
                     # 1. 檢查頁面健康度
                     try:
@@ -472,8 +478,8 @@ class TPEXCloudCrawler:
                             """)
                         time.sleep(0.3)
 
-                        # 前置 Token 強檢門禁
-                        tok = self._wait_token(page, timeout=self.TOKEN_TIMEOUT)
+                        # 前置 Token 強檢門禁 (嚴格比對全新 Token)
+                        tok = self._wait_token(page, last_tok=last_used_token, timeout=self.TOKEN_TIMEOUT)
                         ts_now = get_taipei_now().strftime("%H:%M:%S")
 
                         if not tok:
@@ -535,6 +541,7 @@ class TPEXCloudCrawler:
                                     print(f"[{ts_res}]   [上櫃 {idx}/{total}] [無成交明細/略過] {sym}")
 
                                 fail_streak = 0
+                                last_used_token = tok
                                 time.sleep(self.INTER_STOCK_DELAY)
                                 stock_success = True
                                 break
@@ -542,6 +549,7 @@ class TPEXCloudCrawler:
                             elif "stat" in body and ("查無" in str(body["stat"]) or "無交易" in str(body["stat"]) or "無符合" in str(body["stat"])):
                                 print(f"[{ts_res}]   [上櫃 {idx}/{total}] [無成交/略過] {sym}")
                                 fail_streak = 0
+                                last_used_token = tok
                                 time.sleep(self.INTER_STOCK_DELAY)
                                 stock_success = True
                                 break
