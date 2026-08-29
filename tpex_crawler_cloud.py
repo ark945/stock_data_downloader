@@ -417,23 +417,11 @@ class TPEXCloudCrawler:
 
             for idx, sym in enumerate(stock_codes, 1):
                 try:
-                    # 每處理 15 檔主動清除 Cookie 並重置 TPEX Session (防後端 20~25 檔請求逾時限制)
-                    if idx > 1 and (idx - 1) % 15 == 0:
-                        page.run_js("""
-                            document.cookie.split(";").forEach(function(c) {
-                                document.cookie = c.replace(/^ +/, "").replace(/=.*/, "=;expires=" + new Date().toUTCString() + ";path=/");
-                            });
-                        """)
-                        page.get(self.TPEX_URL, retry=3, timeout=30)
-                        time.sleep(2.0)
-                        self._wait_token(page, timeout=self.PAGE_READY_WAIT)
-                        last_used_token = ""
-                    elif idx > 1:
-                        # 檔間主動觸發 Turnstile 安全重置並清空 input 殘留舊值
-                        page.run_js("""
-                            if (window.turnstile) { try { window.turnstile.reset(); } catch(e){} }
-                            document.querySelectorAll('input[name="cf-turnstile-response"]').forEach(el => el.value = '');
-                        """)
+                    # 每檔（含第 1 檔）皆主動重置 Turnstile 與清空 input，保證現產現用
+                    page.run_js("""
+                        if (window.turnstile) { try { window.turnstile.reset(); } catch(e){} }
+                        document.querySelectorAll('input[name="cf-turnstile-response"]').forEach(el => el.value = '');
+                    """)
 
                     # 1. 檢查頁面健康度
                     try:
@@ -547,15 +535,18 @@ class TPEXCloudCrawler:
                                 stock_success = True
                                 break
 
+                            elif "stat" in body and ("暫停" in str(body["stat"]) or "匯入資料庫" in str(body["stat"])):
+                                print(f"[{ts_res}]   [*] TPEX 伺服器 15:30 例行維護中 ({body.get('stat')})，自動休眠 30 秒...")
+                                time.sleep(30)
+                                page.get(self.TPEX_URL, retry=2, timeout=30)
+                                time.sleep(2.0)
+                                self._wait_token(page, timeout=self.PAGE_READY_WAIT)
+                                continue
+
                             elif "stat" in body and ("操作逾時" in str(body["stat"]) or "真人驗證" in str(body["stat"])):
                                 stat_reason = body.get("stat")
                                 if attempt == 0:
-                                    print(f"[{ts_res}]   [上櫃 {idx}/{total}] [TPEX 會話逾時 -> 即刻清除Cookie刷新頁面自癒] {sym} (原因: {stat_reason})")
-                                    page.run_js("""
-                                        document.cookie.split(";").forEach(function(c) {
-                                            document.cookie = c.replace(/^ +/, "").replace(/=.*/, "=;expires=" + new Date().toUTCString() + ";path=/");
-                                        });
-                                    """)
+                                    print(f"[{ts_res}]   [上櫃 {idx}/{total}] [TPEX 頁面逾時 -> 即刻刷新頁面自癒] {sym} (原因: {stat_reason})")
                                     page.get(self.TPEX_URL, retry=2, timeout=30)
                                     time.sleep(2.0)
                                     self._wait_token(page, timeout=self.PAGE_READY_WAIT)
