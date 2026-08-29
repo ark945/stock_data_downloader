@@ -121,7 +121,9 @@ def _mp_local_worker_task(
                         # 2. 換發全新 Turnstile Token (前置門禁防護)
                         token_ready = False
                         current_tok = ""
-                        for _ in range(35):
+                        for _i in range(35):
+                            if _i == 0 or _i % 6 == 0:
+                                page.run_js("if (window.turnstile) { try { if (window.turnstile.execute) window.turnstile.execute(); } catch(e){} }")
                             time.sleep(0.3)
                             tok = page.run_js("""
                                 if (typeof window.turnstile !== 'undefined' && window.turnstile.getResponse) {

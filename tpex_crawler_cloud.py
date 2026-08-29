@@ -295,12 +295,19 @@ class TPEXCloudCrawler:
     COOLDOWN_SEC = 30           # 重啟瀏覽器前冷卻秒數 (秒)
     PAGE_READY_WAIT = 40        # 首頁 / 重載後等待 Token 簽發上限 (秒)
 
-    def _wait_token(self, page, timeout: int = 35, last_token: str = "") -> str:
+    def _wait_token(self, page, timeout: int = 25, last_token: str = "") -> str:
         """輪詢等待 Cloudflare Turnstile Token 生成就緒 (長度 > 50 且不同於上一個已用 Token)"""
-        for i in range(int(timeout * 2.5)):
+        for i in range(int(timeout * 3)):
             try:
-                # 偶爾觸發微小滾動與擬人互動以喚醒 Turnstile 焦點
-                if i > 0 and i % 6 == 0:
+                # 初始或每隔 6 次循環，主動喚醒 Turnstile 執行簽發
+                if i == 0 or i % 6 == 0:
+                    page.run_js("""
+                        if (typeof window.turnstile !== 'undefined') {
+                            try { if (window.turnstile.execute) window.turnstile.execute(); } catch(e){}
+                        }
+                    """)
+
+                if i > 0 and i % 8 == 0:
                     page.run_js("window.scrollBy(0, 10); window.dispatchEvent(new Event('mousemove'));")
 
                 t = page.run_js("""
@@ -317,7 +324,7 @@ class TPEXCloudCrawler:
                     return t
             except Exception:
                 pass
-            time.sleep(0.4)
+            time.sleep(0.35)
         return ""
 
     def _click_query(self, page) -> None:
@@ -561,7 +568,7 @@ class TPEXCloudCrawler:
                             # 成功：記錄已用 Token、重置失敗計數、觸發背景 Token reset、擬人平穩節流
                             last_used_token = tok
                             fail_streak = 0
-                            page.run_js("if (window.turnstile) try { window.turnstile.reset(); } catch(e){}")
+                            page.run_js("if (window.turnstile) { try { if (window.turnstile.reset) window.turnstile.reset(); } catch(e){} try { if (window.turnstile.execute) window.turnstile.execute(); } catch(e){} }")
                             time.sleep(self.INTER_STOCK_DELAY)
 
                         elif str(body.get("status")) == "520" or "520" in str(body.get("title", "")):
@@ -581,7 +588,7 @@ class TPEXCloudCrawler:
                             print(f"[{ts_res}]   [上櫃 {idx}/{total}] [無成交/略過] {sym}")
                             last_used_token = tok
                             fail_streak = 0
-                            page.run_js("if (window.turnstile) try { window.turnstile.reset(); } catch(e){}")
+                            page.run_js("if (window.turnstile) { try { if (window.turnstile.reset) window.turnstile.reset(); } catch(e){} try { if (window.turnstile.execute) window.turnstile.execute(); } catch(e){} }")
                             time.sleep(self.INTER_STOCK_DELAY)
 
                         else:
