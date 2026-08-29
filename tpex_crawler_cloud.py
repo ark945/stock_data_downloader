@@ -412,20 +412,12 @@ class TPEXCloudCrawler:
                 time.sleep(2.0)
                 tok0 = self._wait_token(page, timeout=self.PAGE_READY_WAIT)
             print(f"[*] 首頁 Cloudflare Turnstile 授權完成 (Token 長度: {len(tok0) if tok0 else 0})，開始執行個股採集。")
+            last_used_token = tok0 or ""
 
             start_t = time.time()
 
             for idx, sym in enumerate(stock_codes, 1):
                 try:
-                    # 每檔（含第 1 檔）皆主動重置並立即觸發 Turnstile 求解，保證現產現用
-                    page.run_js("""
-                        if (window.turnstile) {
-                            try { window.turnstile.reset(); } catch(e){}
-                            try { window.turnstile.execute(); } catch(e){}
-                        }
-                        document.querySelectorAll('input[name="cf-turnstile-response"]').forEach(el => el.value = '');
-                    """)
-
                     # 1. 檢查頁面健康度
                     try:
                         cur_url = page.url or ""
@@ -459,7 +451,16 @@ class TPEXCloudCrawler:
                                     inp.dispatchEvent(new Event('change', {{ bubbles: true }}));
                                 }}
                             """)
-                        time.sleep(0.3)
+                        time.sleep(0.1)
+
+                        # 每檔（含第 1 檔）皆主動重置並立即觸發 Turnstile 求解，保證現產現用
+                        page.run_js("""
+                            if (window.turnstile) {
+                                try { window.turnstile.reset(); } catch(e){}
+                                try { window.turnstile.execute(); } catch(e){}
+                            }
+                            document.querySelectorAll('input[name="cf-turnstile-response"]').forEach(el => el.value = '');
+                        """)
 
                         # 前置 Token 強檢門禁 (嚴格比對全新 Token)
                         tok = self._wait_token(page, last_tok=last_used_token, timeout=self.TOKEN_TIMEOUT)
