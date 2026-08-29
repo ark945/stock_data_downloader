@@ -83,7 +83,7 @@ jobs:
     needs: pre-check
     if: ${{ needs.pre-check.outputs.should_skip != 'true' && (github.event_name == 'schedule' || github.event.inputs.market == 'all' || github.event.inputs.market == 'twse' || github.event.inputs.market == '') }}
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix:
@@ -120,9 +120,9 @@ jobs:
           fi
 
           if [ -n "$TARGET_DATE" ]; then
-            python "$TARGET_SCRIPT" --market twse --date "$TARGET_DATE" --workers 2 --max-rounds 6 --shard-id ${{ matrix.shard }} --num-shards 6 --no-excel
+            python "$TARGET_SCRIPT" --market twse --date "$TARGET_DATE" --workers 4 --max-rounds 6 --shard-id ${{ matrix.shard }} --num-shards 6 --no-excel
           else
-            python "$TARGET_SCRIPT" --market twse --workers 2 --max-rounds 6 --shard-id ${{ matrix.shard }} --num-shards 6 --no-excel
+            python "$TARGET_SCRIPT" --market twse --workers 4 --max-rounds 6 --shard-id ${{ matrix.shard }} --num-shards 6 --no-excel
           fi
 
       - name: 上傳 TWSE 分片產物 (Parquet 與 Log)
@@ -223,7 +223,7 @@ jobs:
   merge-twse:
     name: 聚合 TWSE 上市資料庫與 Log 歸檔
     needs: [pre-check, twse-shards]
-    if: ${{ always() && needs.pre-check.outputs.should_skip != 'true' && needs.twse-shards.result != 'skipped' && needs.twse-shards.result != 'cancelled' }}
+    if: ${{ always() && needs.pre-check.outputs.should_skip != 'true' && needs.twse-shards.result != 'skipped' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -304,7 +304,7 @@ jobs:
   merge-tpex:
     name: 聚合 TPEX 上櫃資料庫與 Log 歸檔
     needs: [pre-check, tpex-shards]
-    if: ${{ always() && needs.pre-check.outputs.should_skip != 'true' && needs.tpex-shards.result != 'skipped' && needs.tpex-shards.result != 'cancelled' }}
+    if: ${{ always() && needs.pre-check.outputs.should_skip != 'true' && needs.tpex-shards.result != 'skipped' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -387,7 +387,7 @@ jobs:
   merge-all:
     name: 整合 TWSE + TPEX 全市場資料庫並推播
     needs: [pre-check, merge-twse, merge-tpex]
-    if: ${{ always() && needs.pre-check.outputs.should_skip != 'true' && (github.event_name == 'schedule' || github.event.inputs.market == 'all' || github.event.inputs.market == '') && (needs.merge-twse.result == 'success' || needs.merge-tpex.result == 'success') }}
+    if: ${{ always() && needs.pre-check.outputs.should_skip != 'true' && (github.event_name == 'schedule' || github.event.inputs.market == 'all' || github.event.inputs.market == '') && (needs.merge-twse.result != 'skipped' || needs.merge-tpex.result != 'skipped') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
