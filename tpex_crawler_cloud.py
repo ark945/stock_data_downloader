@@ -20,6 +20,12 @@ import requests
 import pandas as pd
 import numpy as np
 
+try:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
+except Exception:
+    pass
+
 TAIPEI_TZ = timezone(timedelta(hours=8))
 
 def get_taipei_now() -> datetime:
@@ -303,22 +309,20 @@ class TPEXCloudCrawler:
             time.sleep(0.4)
         return ""
 
-    def _clear_dom_token(self, page) -> None:
-        """主動銷毀 DOM 中已使用過的 Token，確保下一檔必須等待全新票券"""
-        try:
-            page.run_js("""
-                const el = document.querySelector('input[name="cf-turnstile-response"]');
-                if (el) el.value = '';
-            """)
-        except Exception:
-            pass
-
     def _click_query(self, page) -> None:
-        """點擊查詢按鈕"""
+        """精準點擊日報表查詢按鈕"""
+        q_btn = page.ele('css:div.tables-tools button[type="submit"]') or page.ele('css:form.formblock button[type="submit"]') or page.ele('css:.btn-query')
+        if q_btn:
+            try:
+                q_btn.click()
+                return
+            except Exception:
+                pass
         page.run_js("""
-            const btn = document.querySelector('div.formblock button[type="submit"]') || 
+            const btn = document.querySelector('div.tables-tools button[type="submit"]') || 
+                        document.querySelector('div.formblock button[type="submit"]') ||
                         document.querySelector('form.formblock button[type="submit"]') ||
-                        Array.from(document.querySelectorAll('div.formblock button, form.formblock button, button, a')).find(b => (b.innerText||'').trim() === '查詢');
+                        Array.from(document.querySelectorAll('button')).find(b => (b.innerText||'').trim() === '查詢');
             if (btn) btn.click();
         """)
 
@@ -346,16 +350,15 @@ class TPEXCloudCrawler:
         co.set_argument("--disable-dev-shm-usage")
         co.set_argument("--disable-infobars")
         co.set_argument("--window-size=1920,1080")
-        co.set_argument("--excludeSwitches", "enable-automation")
-        co.set_argument("--useAutomationExtension", False)
 
         co.set_user_data_path(temp_user_data)
 
         page = ChromiumPage(addr_or_opts=co)
-        page.listen.start(["afterTrading", "brokerBS"])
+        # 精確過濾 TPEX 官方日報表 API 端點，杜絕 Google Analytics 等無關封包干擾
+        page.listen.start("afterTrading/brokerBS")
 
         page.get(self.TPEX_URL, retry=3, timeout=30)
-        time.sleep(2.0)
+        time.sleep(3.0)
         return page, temp_user_data
 
     def crawl_stocks(
@@ -363,7 +366,7 @@ class TPEXCloudCrawler:
         stock_codes: List[str],
         trade_date: str
     ) -> Tuple[List[pd.DataFrame], List[str]]:
-        """雲端單會話穩健抓取 (CDP 網路封包監聽架構 + 前置 Token 門禁守衛 + 階梯式自癒)"""
+        """雲端單會話穩健抓取 (CDP 網路封包監聽架構 + 前置 Token 門禁守衛 + 15秒熱身 + 階梯式自癒)"""
         import json
         if not stock_codes:
             return [], []
@@ -387,23 +390,33 @@ class TPEXCloudCrawler:
                 shutil.rmtree(temp_user_data, ignore_errors=True)
             time.sleep(self.COOLDOWN_SEC)
             page, temp_user_data = self._launch_browser_session()
+            print("[*] 重啟瀏覽器完成，正在進行 Cloudflare Turnstile 授權預熱 (10~15 秒)...")
             tok_init = self._wait_token(page, timeout=self.PAGE_READY_WAIT)
+            time.sleep(2.5)
             if not tok_init:
                 page.get(self.TPEX_URL, retry=2, timeout=30)
+                time.sleep(3.0)
                 self._wait_token(page, timeout=self.PAGE_READY_WAIT)
+                time.sleep(2.0)
 
         try:
             print(f"[*] 正在啟動 TPEX 雲端持久化引擎 (CDP 封包監聽 + Token 門禁防禦，待抓取: {total} 檔)...")
             page, temp_user_data = self._launch_browser_session()
 
-            # 確保首頁首發 Token 100% 簽發就緒
+            # 關鍵：首頁完整熱身（死等 10~15 秒直到 Cloudflare 握手授權 100% 成立）
+            print("[*] 正在進行首頁 Cloudflare Turnstile 授權握手與預熱 (等待 10~15 秒)...")
             tok0 = self._wait_token(page, timeout=self.PAGE_READY_WAIT)
+            time.sleep(2.5)
             if not tok0:
-                print("[!] 首次 Token 簽發未就緒，正在重新載入首頁...")
+                print("[!] 首次 Token 簽發未就緒，正在重新整理首頁重試...")
                 page.get(self.TPEX_URL, retry=2, timeout=30)
+                time.sleep(3.0)
                 tok0 = self._wait_token(page, timeout=self.PAGE_READY_WAIT)
+                time.sleep(2.0)
                 if not tok0:
                     print("[!] 警告：首次 Token 仍未取得，將由單檔前置守衛負責即時攔截與自癒。")
+            else:
+                print(f"[*] 首頁 Cloudflare Turnstile 驗證授權完成 (Token 長度: {len(tok0)})，開始執行個股採集。")
 
             start_t = time.time()
 
@@ -416,20 +429,32 @@ class TPEXCloudCrawler:
                     except Exception:
                         cur_url, cur_title = "", ""
 
-                    if "brokerBS.html" not in cur_url or "520" in cur_title or "Error" in cur_title or "unknown error" in cur_title:
-                        print(f"[*] 偵測到頁面偏離或異常 ({cur_url})，正在重新導向目標頁面...")
+                    if "brokerBS.html" not in cur_url or "520" in cur_title or "Error" in cur_title or "unknown error" in cur_title or "search.html" in cur_url:
+                        print(f"[*] 偵測到頁面偏離或異常 ({cur_url})，正在導回目標日報表頁面...")
                         page.get(self.TPEX_URL, retry=3, timeout=30)
+                        time.sleep(3.0)
                         self._wait_token(page, timeout=self.PAGE_READY_WAIT)
+                        time.sleep(2.0)
+                        last_used_token = ""
 
                     # 2. 填入股票代碼
-                    page.run_js(f"""
-                        const inp = document.querySelector('input.code') || document.querySelector('[name=code]');
-                        if (inp) {{
-                            inp.value = '{sym}';
-                            inp.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                            inp.dispatchEvent(new Event('change', {{ bubbles: true }}));
-                        }}
-                    """)
+                    code_el = page.ele('@name=code')
+                    if code_el:
+                        try:
+                            code_el.clear()
+                            code_el.input(sym)
+                        except Exception:
+                            page.run_js(f"const inp = document.querySelector('input.code') || document.querySelector('[name=code]'); if (inp) {{ inp.value = '{sym}'; inp.dispatchEvent(new Event('input', {{ bubbles: true }})); inp.dispatchEvent(new Event('change', {{ bubbles: true }})); }}")
+                    else:
+                        page.run_js(f"""
+                            const inp = document.querySelector('input.code') || document.querySelector('[name=code]');
+                            if (inp) {{
+                                inp.value = '{sym}';
+                                inp.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                                inp.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                            }}
+                        """)
+                    time.sleep(0.3)
 
                     # 3. 前置 Token 強檢門禁 (Pre-flight Token Guard)
                     tok = self._wait_token(page, timeout=self.TOKEN_TIMEOUT, last_token=last_used_token)
@@ -452,7 +477,10 @@ class TPEXCloudCrawler:
                         elif fail_streak >= self.RELOAD_AFTER:
                             print(f"[*] 連續失敗達 {fail_streak} 次，正在重新整理首頁重取 Token...")
                             page.get(self.TPEX_URL, retry=2, timeout=30)
+                            time.sleep(3.0)
                             self._wait_token(page, timeout=self.PAGE_READY_WAIT)
+                            time.sleep(2.0)
+                            fail_streak = 0
                             last_used_token = ""
                         continue
 
@@ -468,14 +496,17 @@ class TPEXCloudCrawler:
                         failed_symbols.append(sym)
                         fail_streak += 1
                         print(f"[{ts_res}]   [上櫃 {idx}/{total}] [API 封包逾時] {sym} (連續失敗: {fail_streak})")
-                        self._clear_dom_token(page)
+                        time.sleep(2.0)
                         if fail_streak >= self.RESTART_AFTER:
                             restart_session()
                             fail_streak = 0
                             last_used_token = ""
                         elif fail_streak >= self.RELOAD_AFTER:
                             page.get(self.TPEX_URL, retry=2, timeout=30)
+                            time.sleep(3.0)
                             self._wait_token(page, timeout=self.PAGE_READY_WAIT)
+                            time.sleep(2.0)
+                            fail_streak = 0
                             last_used_token = ""
                         continue
 
@@ -505,28 +536,30 @@ class TPEXCloudCrawler:
                             else:
                                 print(f"[{ts_res}]   [上櫃 {idx}/{total}] [無成交明細/略過] {sym}")
 
-                            # 成功：記錄已用 Token、清空 DOM、重置失敗計數、擬人平穩節流
+                            # 成功：記錄已用 Token、重置失敗計數、觸發背景 Token reset、擬人平穩節流
                             last_used_token = tok
-                            self._clear_dom_token(page)
                             fail_streak = 0
+                            page.run_js("if (window.turnstile) try { window.turnstile.reset(); } catch(e){}")
                             time.sleep(self.INTER_STOCK_DELAY)
 
                         elif str(body.get("status")) == "520" or "520" in str(body.get("title", "")):
                             failed_symbols.append(sym)
                             fail_streak += 1
                             print(f"[{ts_res}]   [上櫃 {idx}/{total}] [CF 520 阻擋] {sym} (連續失敗: {fail_streak})")
-                            self._clear_dom_token(page)
-                            time.sleep(2.0 + fail_streak * 1.5)
+                            time.sleep(3.0 + fail_streak * 1.5)
                             if fail_streak >= self.RELOAD_AFTER:
                                 page.get(self.TPEX_URL, retry=2, timeout=30)
+                                time.sleep(3.0)
                                 self._wait_token(page, timeout=self.PAGE_READY_WAIT)
+                                time.sleep(2.0)
+                                fail_streak = 0
                                 last_used_token = ""
 
                         elif "stat" in body and ("查無" in body["stat"] or "無交易" in body["stat"] or "無符合" in body["stat"]):
                             print(f"[{ts_res}]   [上櫃 {idx}/{total}] [無成交/略過] {sym}")
                             last_used_token = tok
-                            self._clear_dom_token(page)
                             fail_streak = 0
+                            page.run_js("if (window.turnstile) try { window.turnstile.reset(); } catch(e){}")
                             time.sleep(self.INTER_STOCK_DELAY)
 
                         else:
@@ -535,7 +568,6 @@ class TPEXCloudCrawler:
                             stat_msg = body.get("stat") or body.get("message") or str(body)[:60]
                             print(f"[{ts_res}]   [上櫃 {idx}/{total}] [非預期回應: {stat_msg}] {sym} (連續失敗: {fail_streak})")
                             last_used_token = tok
-                            self._clear_dom_token(page)
 
                             if fail_streak >= self.ABORT_AFTER:
                                 print(f"[!] 連續失敗達 {fail_streak} 次，觸發安全熔斷中止本輪。")
@@ -548,18 +580,26 @@ class TPEXCloudCrawler:
                             elif fail_streak >= self.RELOAD_AFTER:
                                 print(f"[*] 連續失敗達 {fail_streak} 次，正在重新整理首頁重取 Token...")
                                 page.get(self.TPEX_URL, retry=2, timeout=30)
+                                time.sleep(3.0)
                                 self._wait_token(page, timeout=self.PAGE_READY_WAIT)
+                                time.sleep(2.0)
+                                fail_streak = 0
                                 last_used_token = ""
                             else:
-                                time.sleep(2.0)
+                                # 單次失敗原地退避 3 秒，讓 Cloudflare 自然重簽 Token
+                                time.sleep(3.0)
+                                page.run_js("if (window.turnstile) try { window.turnstile.reset(); } catch(e){}")
                     else:
                         failed_symbols.append(sym)
                         fail_streak += 1
                         print(f"[{ts_res}]   [上櫃 {idx}/{total}] [解析失敗] {sym} (連續失敗: {fail_streak})")
-                        self._clear_dom_token(page)
+                        time.sleep(2.5)
                         if fail_streak >= self.RELOAD_AFTER:
                             page.get(self.TPEX_URL, retry=2, timeout=30)
+                            time.sleep(3.0)
                             self._wait_token(page, timeout=self.PAGE_READY_WAIT)
+                            time.sleep(2.0)
+                            fail_streak = 0
                             last_used_token = ""
 
                 except Exception as e:
