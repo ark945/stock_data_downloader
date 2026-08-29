@@ -297,15 +297,20 @@ class TPEXCloudCrawler:
 
     def _wait_token(self, page, timeout: int = 35, last_token: str = "") -> str:
         """輪詢等待 Cloudflare Turnstile Token 生成就緒 (長度 > 50 且不同於上一個已用 Token)"""
-        for _ in range(int(timeout * 2.5)):
+        for i in range(int(timeout * 2.5)):
             try:
+                # 偶爾觸發微小滾動與擬人互動以喚醒 Turnstile 焦點
+                if i > 0 and i % 6 == 0:
+                    page.run_js("window.scrollBy(0, 10); window.dispatchEvent(new Event('mousemove'));")
+
                 t = page.run_js("""
                     if (typeof window.turnstile !== 'undefined' && window.turnstile.getResponse) {
                         const r = window.turnstile.getResponse();
                         if (r && r.length > 50) return r;
                     }
                     const el = document.querySelector('form.formblock input[name="cf-turnstile-response"]') || 
-                               document.querySelector('input[name="cf-turnstile-response"]');
+                               document.querySelector('input[name="cf-turnstile-response"]') ||
+                               document.querySelector('[name*="turnstile"]');
                     return el ? (el.value || '') : '';
                 """)
                 if t and len(t) > 50 and t != last_token:
@@ -345,7 +350,7 @@ class TPEXCloudCrawler:
         co = ChromiumOptions()
         co.set_local_port(actual_port)
         if sys.platform.startswith("linux"):
-            for bin_p in ["/usr/bin/chromium-browser", "/usr/bin/chromium", "/usr/bin/google-chrome"]:
+            for bin_p in ["/usr/bin/google-chrome", "/usr/bin/google-chrome-stable", "/usr/bin/chromium", "/usr/bin/chromium-browser"]:
                 if os.path.exists(bin_p):
                     co.set_paths(browser_path=bin_p)
                     break
@@ -356,10 +361,21 @@ class TPEXCloudCrawler:
         co.set_argument("--disable-dev-shm-usage")
         co.set_argument("--disable-infobars")
         co.set_argument("--window-size=1920,1080")
+        co.set_argument("--disable-blink-features=AutomationControlled")
+        co.set_user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
 
         co.set_user_data_path(temp_user_data)
 
         page = ChromiumPage(addr_or_opts=co)
+
+        try:
+            page.run_cdp("Page.addScriptToEvaluateOnNewDocument", source="""
+                Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+                window.chrome = { runtime: {} };
+            """)
+        except Exception:
+            pass
+
         # 精確過濾 TPEX 官方日報表 API 端點，杜絕 Google Analytics 等無關封包干擾
         page.listen.start("afterTrading/brokerBS")
 
