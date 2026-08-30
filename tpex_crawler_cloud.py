@@ -317,6 +317,39 @@ class TPEXCloudCrawler:
     MAX_INTER_STOCK_DELAY = 1.0 # 檔間平穩微延遲上限 (秒)
     PAGE_READY_WAIT = 25        # 首頁 / 重載後等待 Token 簽發上限 (秒)
 
+    def _try_solve_turnstile(self, page) -> bool:
+        """主動偵測並模擬點擊 Cloudflare Turnstile 互動式驗證核取方塊 (含 Shadow DOM / IFrame 穿透)"""
+        try:
+            # 1. 嘗試由 JS 自動穿透點擊
+            res = page.run_js("""
+                let clicked = false;
+                const iframes = Array.from(document.querySelectorAll('iframe'));
+                for (const f of iframes) {
+                    if (f.src && f.src.includes('cloudflare.com')) {
+                        try {
+                            const doc = f.contentDocument || f.contentWindow.document;
+                            const cb = doc.querySelector('input[type="checkbox"]') || doc.querySelector('#challenge-stage') || doc.querySelector('.ctp-checkbox-label');
+                            if (cb) { cb.click(); clicked = true; }
+                        } catch(e) {}
+                    }
+                }
+                return clicked;
+            """)
+            if res:
+                return True
+
+            # 2. 透過 DrissionPage 元素樹定位點擊
+            for frame in page.eles('tag:iframe'):
+                src = frame.attr('src') or ''
+                if 'cloudflare' in src or 'turnstile' in src:
+                    cb = frame.ele('tag:input@type=checkbox') or frame.ele('#challenge-stage') or frame.ele('css:.ctp-checkbox-label')
+                    if cb:
+                        cb.click()
+                        return True
+        except Exception:
+            pass
+        return False
+
     def _click_query(self, page) -> None:
         """精準點擊日報表「查詢」按鈕 (文字判定 + CSS Selector 雙重保險)"""
         page.run_js("""
@@ -346,16 +379,31 @@ class TPEXCloudCrawler:
                     co.set_paths(browser_path=bin_p)
                     break
 
-        co.set_argument("--lang=zh-TW")
+        # 反爬與指紋偽裝核心配置 (徹底隱匿自動化特徵，保證 Cloudflare Turnstile 判定為真人在地連線)
         co.set_argument("--no-sandbox")
-        co.set_argument("--disable-gpu")
         co.set_argument("--disable-dev-shm-usage")
+        co.set_argument("--disable-blink-features=AutomationControlled")
+        co.set_argument("--lang=zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7")
+        co.set_user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
         co.set_argument("--window-size=1920,1080")
+        co.set_argument("--start-maximized")
 
         page = ChromiumPage(addr_or_opts=co)
+        
+        # 透過 CDP 於新文檔中全面移除 navigator.webdriver 標記
+        try:
+            page.run_cdp("Page.addScriptToEvaluateOnNewDocument", source="""
+                Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+                Object.defineProperty(navigator, 'languages', { get: () => ['zh-TW', 'zh', 'en-US', 'en'] });
+                Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+                window.chrome = { runtime: {}, loadTimes: function() {}, csi: function() {}, app: {} };
+            """)
+        except Exception:
+            pass
+
         page.listen.start(["afterTrading", "brokerBS"])
         page.get(self.TPEX_URL, retry=3, timeout=30)
-        time.sleep(2.0)
+        time.sleep(2.5)
         return page, None
 
     def crawl_stocks(
@@ -418,6 +466,7 @@ class TPEXCloudCrawler:
                             for _i in range(35):
                                 if _i == 0 or _i % 6 == 0:
                                     page.run_js("if (window.turnstile) { try { if (window.turnstile.execute) window.turnstile.execute(); } catch(e){} }")
+                                    self._try_solve_turnstile(page)
                                 time.sleep(0.3)
                                 tok = page.run_js("""
                                     if (typeof window.turnstile !== 'undefined' && window.turnstile.getResponse) {
@@ -434,6 +483,7 @@ class TPEXCloudCrawler:
                             if not token_ready:
                                 page.get(self.TPEX_URL, retry=2, timeout=25)
                                 time.sleep(2.5)
+                                self._try_solve_turnstile(page)
                                 page.run_js(f"""
                                     const inp = document.querySelector('input.code') || document.querySelector('[name=code]');
                                     if (inp) {{
@@ -442,7 +492,9 @@ class TPEXCloudCrawler:
                                         inp.dispatchEvent(new Event('change', {{ bubbles: true }}));
                                     }}
                                 """)
-                                for _ in range(40):
+                                for _i in range(40):
+                                    if _i % 6 == 0:
+                                        self._try_solve_turnstile(page)
                                     time.sleep(0.3)
                                     tok = page.run_js("""
                                         if (typeof window.turnstile !== 'undefined' && window.turnstile.getResponse) {
