@@ -417,11 +417,11 @@ class TPEXCloudCrawler:
                         print(f"[*] [即時自癒] 偵測到連續失敗 {consecutive_fails} 次，輪換 WARP 出口 IP 並重啟 Chromium 會話...")
                         _cleanup_browser(page, temp_user_data)
                         if sys.platform.startswith("linux"):
-                            os.system("warp-cli --accept-tos disconnect 2>/dev/null; sleep 1; warp-cli --accept-tos connect 2>/dev/null || true")
-                        time.sleep(2.0)
+                            os.system("warp-cli --accept-tos disconnect 2>/dev/null; sleep 1; warp-cli --accept-tos connect 2>/dev/null; sleep 3 || true")
+                        time.sleep(2.5)
                         page, temp_user_data = self._launch_browser_session()
                         page.get(self.TPEX_URL, retry=3, timeout=30)
-                        time.sleep(2.5)
+                        time.sleep(3.0)
                         consecutive_fails = 0
 
                     for attempt in range(1, 4):
