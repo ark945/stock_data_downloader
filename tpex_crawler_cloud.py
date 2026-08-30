@@ -546,8 +546,14 @@ class TPEXCloudCrawler:
                                 else:
                                     stat_msg = body.get("stat") or body.get("message") or str(body)[:60]
                                     print(f"[{ts_res}]   [上櫃 {idx}/{total}] [非預期回應: {stat_msg}] {sym} (重試 {attempt}/3)")
-                                    page.get(self.TPEX_URL, retry=2, timeout=25)
-                                    time.sleep(2.5)
+                                    # 若為操作逾時或 Session 失效，徹底重啟瀏覽器重建全新 PHP Session
+                                    if "逾時" in str(stat_msg) or "重新整理" in str(stat_msg):
+                                        _cleanup_browser(page, temp_user_data)
+                                        time.sleep(2.0)
+                                        page, temp_user_data = self._launch_browser_session()
+                                    else:
+                                        page.get(self.TPEX_URL, retry=2, timeout=25)
+                                        time.sleep(2.5)
                                     continue
 
                             if attempt < 3:
