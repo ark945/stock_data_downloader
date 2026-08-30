@@ -334,14 +334,10 @@ class TPEXCloudCrawler:
         """)
 
     def _launch_browser_session(self, port: Optional[int] = None):
-        import tempfile
-        import shutil
         from DrissionPage import ChromiumPage, ChromiumOptions
 
         if "DISPLAY" not in os.environ and os.name != "nt":
             os.environ["DISPLAY"] = ":99"
-
-        temp_user_data = tempfile.mkdtemp(prefix="dp_tpex_")
 
         co = ChromiumOptions()
         if sys.platform.startswith("linux"):
@@ -350,7 +346,7 @@ class TPEXCloudCrawler:
                     co.set_paths(browser_path=bin_p)
                     break
 
-        co.set_user_data_path(temp_user_data)
+        # 不設定 user_data_path，使用 DrissionPage 預設路徑 (成功 Run 33281087542 驗證配置)
         co.set_argument("--no-sandbox")
         co.set_argument("--disable-dev-shm-usage")
         co.set_argument("--disable-blink-features=AutomationControlled")
@@ -370,10 +366,11 @@ class TPEXCloudCrawler:
         except Exception:
             pass
 
-        page.listen.start(["afterTrading", "brokerBS"])
+        # 使用字串 URL 片段匹配 (成功 Run 驗證的格式)
+        page.listen.start("afterTrading/brokerBS")
         page.get(self.TPEX_URL, retry=3, timeout=30)
         time.sleep(2.5)
-        return page, temp_user_data
+        return page, None
 
     def crawl_stocks(
         self,
@@ -382,7 +379,6 @@ class TPEXCloudCrawler:
     ) -> Tuple[List[pd.DataFrame], List[str]]:
         """雲端單會話極速穩健抓取 (移植 Local 100% 成功之 Turnstile 門禁與自癒架構)"""
         import json
-        import shutil
 
         if not stock_codes:
             return [], []
@@ -394,14 +390,12 @@ class TPEXCloudCrawler:
         temp_user_data = None
         processed_symbols = set()
 
-        def _cleanup_browser(p, u_data):
+        def _cleanup_browser(p, _u_data=None):
+            """清理瀏覽器行程，在 Linux 上額外 pkill 殭屍行程"""
             try:
                 if p: p.quit()
             except Exception:
                 pass
-            if u_data and os.path.exists(u_data):
-                try: shutil.rmtree(u_data, ignore_errors=True)
-                except Exception: pass
             if sys.platform.startswith("linux"):
                 os.system("pkill -9 -f 'chrome|chromium' 2>/dev/null || true")
 
@@ -409,25 +403,14 @@ class TPEXCloudCrawler:
             print(f"[*] 正在啟動 TPEX 雲端持久化引擎 (待抓取: {total} 檔)...")
             page, temp_user_data = self._launch_browser_session()
 
-            # 首次載入頁面並預熱 Turnstile
-            init_tok = None
-            for _ in range(30):
-                init_tok = page.run_js("""
-                    if (typeof window.turnstile !== 'undefined' && window.turnstile.getResponse) {
-                        const r = window.turnstile.getResponse();
-                        if (r && r.length > 50) return r;
-                    }
-                    const el = document.querySelector('form.formblock input[name="cf-turnstile-response"]') || document.querySelector('input[name="cf-turnstile-response"]');
-                    return el ? (el.value || '') : '';
-                """)
-                if init_tok and len(init_tok) > 50:
-                    break
-                time.sleep(0.3)
-
-            if init_tok and len(init_tok) > 50:
-                print(f"[*] 首頁 Cloudflare Turnstile 授權完成 (Token 長度: {len(init_tok)})，開始執行個股採集。")
-            else:
-                print("[*] 首頁載入完成，進入個股查詢迴圈。")
+            # 診斷：列印當前頁面 URL 與 Turnstile 狀態
+            try:
+                cur_url = page.url or 'N/A'
+                has_turnstile = page.run_js("return typeof window.turnstile !== 'undefined'") or False
+                has_form = page.run_js("return !!document.querySelector('form.formblock')") or False
+                print(f"[*] 頁面就緒: URL={cur_url}, Turnstile物件={has_turnstile}, 表單={has_form}")
+            except Exception as diag_e:
+                print(f"[*] 診斷例外: {diag_e}")
 
             start_t = time.time()
 
