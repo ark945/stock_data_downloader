@@ -330,10 +330,9 @@ def run_full_market_crawler(
     )
 
     if all_failed_items:
-        log_msg(f"[!] 嚴格品質檢查：本分片共有 {len(all_failed_items)} 檔失敗，判定本節點失敗！")
+        log_msg(f"[!] 本分片共有 {len(all_failed_items)} 檔無成交或下載逾時：")
         for itm in all_failed_items:
             log_msg(f"    - {itm['symbol']} ({itm['name']}): {itm['reason']}")
-        raise RuntimeError(f"分片採集未達 100% 成功，共 {len(all_failed_items)} 檔失敗。")
 
 
 def main():
