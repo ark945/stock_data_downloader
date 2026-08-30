@@ -393,21 +393,9 @@ class TPEXCloudCrawler:
             page.get(self.TPEX_URL, retry=3, timeout=30)
             time.sleep(2.5)
 
-            # 診斷：列印當前頁面 URL 與 Turnstile 狀態
-            try:
-                cur_url = page.url or 'N/A'
-                has_turnstile = page.run_js("return typeof window.turnstile !== 'undefined'") or False
-                has_form = page.run_js("return !!document.querySelector('form.formblock')") or False
-                tok_len = len(page.run_js("""
-                    var el = document.querySelector('input[name="cf-turnstile-response"]');
-                    return el ? (el.value || '') : '';
-                """) or '')
-                print(f"[*] 頁面就緒: URL={cur_url}, Turnstile={has_turnstile}, 表單={has_form}, Token長度={tok_len}")
-            except Exception as diag_e:
-                print(f"[*] 診斷例外: {diag_e}")
-
             start_t = time.time()
             consecutive_fails = 0
+            last_used_tok = ""
 
             for idx, sym in enumerate(stock_codes, 1):
                 success_crawl = False
@@ -425,6 +413,7 @@ class TPEXCloudCrawler:
                         page, temp_user_data = self._launch_browser_session()
                         page.get(self.TPEX_URL, retry=3, timeout=30)
                         time.sleep(3.0)
+                        last_used_tok = ""
 
                     for attempt in range(1, 4):
                         try:
@@ -432,6 +421,7 @@ class TPEXCloudCrawler:
                             if "brokerBS.html" not in (page.url or "") or "search.html" in (page.url or ""):
                                 page.get(self.TPEX_URL, retry=2, timeout=20)
                                 time.sleep(1.5)
+                                last_used_tok = ""
 
                             # 填入股票代碼
                             page.run_js(f"""
@@ -443,28 +433,30 @@ class TPEXCloudCrawler:
                                 }}
                             """)
 
-                            # 2. 取得有效 Turnstile Token (優先複用既有 Token，不足時才觸發簽發)
+                            # 2. 取得全新未被消耗的 Turnstile Token
                             token_ready = False
+                            current_tok = ""
                             for _i in range(35):
+                                if _i == 0 or _i % 6 == 0:
+                                    page.run_js("if (window.turnstile) { try { if (window.turnstile.execute) window.turnstile.execute(); } catch(e){} }")
+                                time.sleep(0.3)
                                 tok = page.run_js("""
-                                    const el = document.querySelector('form.formblock input[name="cf-turnstile-response"]') || document.querySelector('input[name="cf-turnstile-response"]');
-                                    if (el && el.value && el.value.length > 50) return el.value;
                                     if (typeof window.turnstile !== 'undefined' && window.turnstile.getResponse) {
                                         const r = window.turnstile.getResponse();
                                         if (r && r.length > 50) return r;
                                     }
-                                    return '';
+                                    const el = document.querySelector('form.formblock input[name="cf-turnstile-response"]') || document.querySelector('input[name="cf-turnstile-response"]');
+                                    return el ? (el.value || '') : '';
                                 """)
-                                if tok and len(tok) > 50:
+                                if tok and len(tok) > 50 and tok != last_used_tok:
                                     token_ready = True
+                                    current_tok = tok
                                     break
-                                if _i == 0 or _i % 8 == 0:
-                                    page.run_js("if (window.turnstile && window.turnstile.execute) { try { window.turnstile.execute(); } catch(e){} }")
-                                time.sleep(0.3)
 
                             if not token_ready:
                                 page.get(self.TPEX_URL, retry=2, timeout=25)
                                 time.sleep(2.5)
+                                last_used_tok = ""
                                 page.run_js(f"""
                                     const inp = document.querySelector('input.code') || document.querySelector('[name=code]');
                                     if (inp) {{
@@ -474,19 +466,19 @@ class TPEXCloudCrawler:
                                     }}
                                 """)
                                 for _ in range(40):
+                                    time.sleep(0.3)
                                     tok = page.run_js("""
-                                        const el = document.querySelector('form.formblock input[name="cf-turnstile-response"]') || document.querySelector('input[name="cf-turnstile-response"]');
-                                        if (el && el.value && el.value.length > 50) return el.value;
                                         if (typeof window.turnstile !== 'undefined' && window.turnstile.getResponse) {
                                             const r = window.turnstile.getResponse();
                                             if (r && r.length > 50) return r;
                                         }
-                                        return '';
+                                        const el = document.querySelector('form.formblock input[name="cf-turnstile-response"]') || document.querySelector('input[name="cf-turnstile-response"]');
+                                        return el ? (el.value || '') : '';
                                     """)
                                     if tok and len(tok) > 50:
                                         token_ready = True
+                                        current_tok = tok
                                         break
-                                    time.sleep(0.3)
 
                             if not token_ready:
                                 if attempt < 3:
@@ -511,6 +503,10 @@ class TPEXCloudCrawler:
 
                             pkt = page.listen.wait(timeout=25)
                             ts_res = get_taipei_now().strftime("%H:%M:%S")
+
+                            # 標記此 Token 已被提交消耗，並觸發 Turnstile 背景重簽
+                            last_used_tok = current_tok
+                            page.run_js("if (window.turnstile) try { window.turnstile.reset(); } catch(e){}")
 
                             if not pkt:
                                 if attempt < 3:
@@ -556,9 +552,11 @@ class TPEXCloudCrawler:
                                     time.sleep(0.4)
                                     break
                                 else:
-                                    # 遭遇操作逾時等非預期回應時刷新頁面
+                                    stat_msg = body.get("stat") or body.get("message") or str(body)[:60]
+                                    print(f"[{ts_res}]   [上櫃 {idx}/{total}] [非預期回應: {stat_msg}] {sym} (重試 {attempt}/3)")
                                     page.get(self.TPEX_URL, retry=2, timeout=25)
                                     time.sleep(1.5)
+                                    last_used_tok = ""
                                     continue
 
                             if attempt < 3:
@@ -572,6 +570,7 @@ class TPEXCloudCrawler:
                                 page, temp_user_data = self._launch_browser_session()
                                 page.get(self.TPEX_URL, retry=3, timeout=30)
                                 time.sleep(2.0)
+                                last_used_tok = ""
 
                             if attempt < 3:
                                 time.sleep(0.8)
