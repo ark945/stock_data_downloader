@@ -346,30 +346,16 @@ class TPEXCloudCrawler:
                     co.set_paths(browser_path=bin_p)
                     break
 
-        # 不設定 user_data_path，使用 DrissionPage 預設路徑 (成功 Run 33281087542 驗證配置)
+        co.set_argument("--lang=zh-TW")
         co.set_argument("--no-sandbox")
+        co.set_argument("--disable-gpu")
         co.set_argument("--disable-dev-shm-usage")
-        co.set_argument("--disable-blink-features=AutomationControlled")
-        co.set_argument("--lang=zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7")
-        co.set_user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
         co.set_argument("--window-size=1920,1080")
 
         page = ChromiumPage(addr_or_opts=co)
-        
-        try:
-            page.run_cdp("Page.addScriptToEvaluateOnNewDocument", source="""
-                Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-                Object.defineProperty(navigator, 'languages', { get: () => ['zh-TW', 'zh', 'en-US', 'en'] });
-                Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
-                window.chrome = { runtime: {}, loadTimes: function() {}, csi: function() {}, app: {} };
-            """)
-        except Exception:
-            pass
-
-        # 使用字串 URL 片段匹配 (成功 Run 驗證的格式)
         page.listen.start("afterTrading/brokerBS")
         page.get(self.TPEX_URL, retry=3, timeout=30)
-        time.sleep(2.5)
+        time.sleep(2.0)
         return page, None
 
     def crawl_stocks(
@@ -403,8 +389,7 @@ class TPEXCloudCrawler:
             print(f"[*] 正在啟動 TPEX 雲端持久化引擎 (待抓取: {total} 檔)...")
             page, temp_user_data = self._launch_browser_session()
 
-            # 二次載入首頁：觸發 Turnstile non-interactive challenge 完成簽發
-            # (成功 Run 33281087542 的核心配置，不可省略)
+            # 首次載入頁面並預熱 Turnstile (驗證配置)
             page.get(self.TPEX_URL, retry=3, timeout=30)
             time.sleep(2.5)
 
@@ -454,10 +439,10 @@ class TPEXCloudCrawler:
 
                             # 2. 換發全新 Turnstile Token (前置門禁強檢)
                             token_ready = False
-                            for _i in range(30):
+                            for _i in range(35):
                                 if _i == 0 or _i % 6 == 0:
                                     page.run_js("if (window.turnstile) { try { if (window.turnstile.execute) window.turnstile.execute(); } catch(e){} }")
-                                time.sleep(0.25)
+                                time.sleep(0.3)
                                 tok = page.run_js("""
                                     if (typeof window.turnstile !== 'undefined' && window.turnstile.getResponse) {
                                         const r = window.turnstile.getResponse();
@@ -472,7 +457,7 @@ class TPEXCloudCrawler:
 
                             if not token_ready:
                                 page.get(self.TPEX_URL, retry=2, timeout=25)
-                                time.sleep(2.0)
+                                time.sleep(2.5)
                                 page.run_js(f"""
                                     const inp = document.querySelector('input.code') || document.querySelector('[name=code]');
                                     if (inp) {{
@@ -481,8 +466,8 @@ class TPEXCloudCrawler:
                                         inp.dispatchEvent(new Event('change', {{ bubbles: true }}));
                                     }}
                                 """)
-                                for _ in range(25):
-                                    time.sleep(0.25)
+                                for _ in range(40):
+                                    time.sleep(0.3)
                                     tok = page.run_js("""
                                         if (typeof window.turnstile !== 'undefined' && window.turnstile.getResponse) {
                                             const r = window.turnstile.getResponse();
@@ -497,19 +482,26 @@ class TPEXCloudCrawler:
 
                             if not token_ready:
                                 if attempt < 3:
-                                    time.sleep(1.0)
+                                    time.sleep(1.5)
                                 continue
 
                             # 3. 清空監聽佇列並點擊查詢按鈕
                             page.listen.clear()
-                            page.run_js("""
-                                const btn = document.querySelector('form.formblock button[type="submit"]') || 
-                                            document.querySelector('div.tables-tools button[type="submit"]') ||
-                                            Array.from(document.querySelectorAll('button')).find(b => (b.innerText||'').trim() === '查詢');
-                                if (btn) btn.click();
-                            """)
+                            q_btn = page.ele('css:form.formblock button[type="submit"]') or page.ele('css:div.tables-tools button[type="submit"]')
+                            if q_btn:
+                                try:
+                                    q_btn.click()
+                                except Exception:
+                                    page.run_js("const b = document.querySelector('form.formblock button[type=\"submit\"]'); if (b) b.click();")
+                            else:
+                                page.run_js("""
+                                    const btn = document.querySelector('form.formblock button[type="submit"]') || 
+                                                document.querySelector('div.tables-tools button[type="submit"]') ||
+                                                Array.from(document.querySelectorAll('button')).find(b => (b.innerText||'').trim() === '查詢');
+                                    if (btn) btn.click();
+                                """)
 
-                            pkt = page.listen.wait(timeout=20)
+                            pkt = page.listen.wait(timeout=25)
                             ts_res = get_taipei_now().strftime("%H:%M:%S")
 
                             # 觸發 Turnstile 背景重簽
