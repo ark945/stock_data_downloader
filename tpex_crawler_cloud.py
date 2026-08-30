@@ -403,12 +403,21 @@ class TPEXCloudCrawler:
             print(f"[*] 正在啟動 TPEX 雲端持久化引擎 (待抓取: {total} 檔)...")
             page, temp_user_data = self._launch_browser_session()
 
+            # 二次載入首頁：觸發 Turnstile non-interactive challenge 完成簽發
+            # (成功 Run 33281087542 的核心配置，不可省略)
+            page.get(self.TPEX_URL, retry=3, timeout=30)
+            time.sleep(2.5)
+
             # 診斷：列印當前頁面 URL 與 Turnstile 狀態
             try:
                 cur_url = page.url or 'N/A'
                 has_turnstile = page.run_js("return typeof window.turnstile !== 'undefined'") or False
                 has_form = page.run_js("return !!document.querySelector('form.formblock')") or False
-                print(f"[*] 頁面就緒: URL={cur_url}, Turnstile物件={has_turnstile}, 表單={has_form}")
+                tok_len = len(page.run_js("""
+                    var el = document.querySelector('input[name="cf-turnstile-response"]');
+                    return el ? (el.value || '') : '';
+                """) or '')
+                print(f"[*] 頁面就緒: URL={cur_url}, Turnstile={has_turnstile}, 表單={has_form}, Token長度={tok_len}")
             except Exception as diag_e:
                 print(f"[*] 診斷例外: {diag_e}")
 
@@ -423,6 +432,8 @@ class TPEXCloudCrawler:
                         _cleanup_browser(page, temp_user_data)
                         time.sleep(1.5)
                         page, temp_user_data = self._launch_browser_session()
+                        page.get(self.TPEX_URL, retry=3, timeout=30)
+                        time.sleep(2.0)
 
                     for attempt in range(1, 4):
                         try:
