@@ -414,6 +414,9 @@ class TPEXCloudCrawler:
                 try:
                     # 智慧自癒熔斷：若連續失敗達 3 次，立刻輪換 WARP 出口 IP 並徹底重構全新瀏覽器會話
                     if consecutive_fails >= 3:
+                        if consecutive_fails >= 6:
+                            print(f"[!] 連續失敗達 {consecutive_fails} 次，觸發安全熔斷中止本輪採集。")
+                            break
                         print(f"[*] [即時自癒] 偵測到連續失敗 {consecutive_fails} 次，輪換 WARP 出口 IP 並重啟 Chromium 會話...")
                         _cleanup_browser(page, temp_user_data)
                         if sys.platform.startswith("linux"):
@@ -422,7 +425,6 @@ class TPEXCloudCrawler:
                         page, temp_user_data = self._launch_browser_session()
                         page.get(self.TPEX_URL, retry=3, timeout=30)
                         time.sleep(3.0)
-                        consecutive_fails = 0
 
                     for attempt in range(1, 4):
                         try:
@@ -441,23 +443,24 @@ class TPEXCloudCrawler:
                                 }}
                             """)
 
-                            # 2. 換發全新 Turnstile Token (前置門禁強檢)
+                            # 2. 取得有效 Turnstile Token (優先複用既有 Token，不足時才觸發簽發)
                             token_ready = False
                             for _i in range(35):
-                                if _i == 0 or _i % 6 == 0:
-                                    page.run_js("if (window.turnstile) { try { if (window.turnstile.execute) window.turnstile.execute(); } catch(e){} }")
-                                time.sleep(0.3)
                                 tok = page.run_js("""
+                                    const el = document.querySelector('form.formblock input[name="cf-turnstile-response"]') || document.querySelector('input[name="cf-turnstile-response"]');
+                                    if (el && el.value && el.value.length > 50) return el.value;
                                     if (typeof window.turnstile !== 'undefined' && window.turnstile.getResponse) {
                                         const r = window.turnstile.getResponse();
                                         if (r && r.length > 50) return r;
                                     }
-                                    const el = document.querySelector('form.formblock input[name="cf-turnstile-response"]') || document.querySelector('input[name="cf-turnstile-response"]');
-                                    return el ? (el.value || '') : '';
+                                    return '';
                                 """)
                                 if tok and len(tok) > 50:
                                     token_ready = True
                                     break
+                                if _i == 0 or _i % 8 == 0:
+                                    page.run_js("if (window.turnstile && window.turnstile.execute) { try { window.turnstile.execute(); } catch(e){} }")
+                                time.sleep(0.3)
 
                             if not token_ready:
                                 page.get(self.TPEX_URL, retry=2, timeout=25)
@@ -471,18 +474,19 @@ class TPEXCloudCrawler:
                                     }}
                                 """)
                                 for _ in range(40):
-                                    time.sleep(0.3)
                                     tok = page.run_js("""
+                                        const el = document.querySelector('form.formblock input[name="cf-turnstile-response"]') || document.querySelector('input[name="cf-turnstile-response"]');
+                                        if (el && el.value && el.value.length > 50) return el.value;
                                         if (typeof window.turnstile !== 'undefined' && window.turnstile.getResponse) {
                                             const r = window.turnstile.getResponse();
                                             if (r && r.length > 50) return r;
                                         }
-                                        const el = document.querySelector('form.formblock input[name="cf-turnstile-response"]') || document.querySelector('input[name="cf-turnstile-response"]');
-                                        return el ? (el.value || '') : '';
+                                        return '';
                                     """)
                                     if tok and len(tok) > 50:
                                         token_ready = True
                                         break
+                                    time.sleep(0.3)
 
                             if not token_ready:
                                 if attempt < 3:
@@ -507,9 +511,6 @@ class TPEXCloudCrawler:
 
                             pkt = page.listen.wait(timeout=25)
                             ts_res = get_taipei_now().strftime("%H:%M:%S")
-
-                            # 觸發 Turnstile 背景重簽
-                            page.run_js("if (window.turnstile) try { window.turnstile.reset(); } catch(e){}")
 
                             if not pkt:
                                 if attempt < 3:
@@ -580,9 +581,10 @@ class TPEXCloudCrawler:
                         consecutive_fails += 1
                         ts_res = get_taipei_now().strftime("%H:%M:%S")
                         failed_symbols.append(sym)
-                        print(f"[{ts_res}]   [上櫃 {idx}/{total}] [採集失敗/已記錄待補抓] {sym}")
+                        print(f"[{ts_res}]   [上櫃 {idx}/{total}] [採集失敗/已記錄待補抓] {sym} (連敗: {consecutive_fails})")
 
                 except Exception as single_e:
+                    consecutive_fails += 1
                     ts_err = get_taipei_now().strftime("%H:%M:%S")
                     processed_symbols.add(sym)
                     failed_symbols.append(sym)
