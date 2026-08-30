@@ -355,7 +355,7 @@ class TPEXCloudCrawler:
         page = ChromiumPage(addr_or_opts=co)
         page.listen.start(["afterTrading", "brokerBS"])
         page.get(self.TPEX_URL, retry=3, timeout=30)
-        time.sleep(2.5)
+        time.sleep(4.0)
         return page, None
 
     def crawl_stocks(
@@ -409,8 +409,8 @@ class TPEXCloudCrawler:
                         print(f"[*] [即時自癒] 偵測到連續失敗 {consecutive_fails} 次，輪換 WARP 出口 IP 並重啟 Chromium 會話...")
                         _cleanup_browser(page, temp_user_data)
                         if sys.platform.startswith("linux"):
-                            os.system("warp-cli --accept-tos disconnect 2>/dev/null; sleep 1; warp-cli --accept-tos connect 2>/dev/null; sleep 3 || true")
-                        time.sleep(2.5)
+                            os.system("warp-cli --accept-tos disconnect 2>/dev/null; sleep 2; warp-cli --accept-tos connect 2>/dev/null; sleep 6 || true")
+                        time.sleep(3.0)
                         page, temp_user_data = self._launch_browser_session()
 
                     for attempt in range(1, 4):
