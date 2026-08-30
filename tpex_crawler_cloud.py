@@ -317,39 +317,6 @@ class TPEXCloudCrawler:
     MAX_INTER_STOCK_DELAY = 1.0 # 檔間平穩微延遲上限 (秒)
     PAGE_READY_WAIT = 25        # 首頁 / 重載後等待 Token 簽發上限 (秒)
 
-    def _try_solve_turnstile(self, page) -> bool:
-        """主動偵測並模擬點擊 Cloudflare Turnstile 互動式驗證核取方塊 (含 Shadow DOM / IFrame 穿透)"""
-        try:
-            # 1. 嘗試由 JS 自動穿透點擊
-            res = page.run_js("""
-                let clicked = false;
-                const iframes = Array.from(document.querySelectorAll('iframe'));
-                for (const f of iframes) {
-                    if (f.src && f.src.includes('cloudflare.com')) {
-                        try {
-                            const doc = f.contentDocument || f.contentWindow.document;
-                            const cb = doc.querySelector('input[type="checkbox"]') || doc.querySelector('#challenge-stage') || doc.querySelector('.ctp-checkbox-label');
-                            if (cb) { cb.click(); clicked = true; }
-                        } catch(e) {}
-                    }
-                }
-                return clicked;
-            """)
-            if res:
-                return True
-
-            # 2. 透過 DrissionPage 元素樹定位點擊
-            for frame in page.eles('tag:iframe'):
-                src = frame.attr('src') or ''
-                if 'cloudflare' in src or 'turnstile' in src:
-                    cb = frame.ele('tag:input@type=checkbox') or frame.ele('#challenge-stage') or frame.ele('css:.ctp-checkbox-label')
-                    if cb:
-                        cb.click()
-                        return True
-        except Exception:
-            pass
-        return False
-
     def _click_query(self, page) -> None:
         """精準點擊日報表「查詢」按鈕 (文字判定 + CSS Selector 雙重保險)"""
         page.run_js("""
@@ -367,10 +334,14 @@ class TPEXCloudCrawler:
         """)
 
     def _launch_browser_session(self, port: Optional[int] = None):
+        import tempfile
+        import shutil
         from DrissionPage import ChromiumPage, ChromiumOptions
 
         if "DISPLAY" not in os.environ and os.name != "nt":
             os.environ["DISPLAY"] = ":99"
+
+        temp_user_data = tempfile.mkdtemp(prefix="dp_tpex_")
 
         co = ChromiumOptions()
         if sys.platform.startswith("linux"):
@@ -379,18 +350,16 @@ class TPEXCloudCrawler:
                     co.set_paths(browser_path=bin_p)
                     break
 
-        # 反爬與指紋偽裝核心配置 (徹底隱匿自動化特徵，保證 Cloudflare Turnstile 判定為真人在地連線)
+        co.set_user_data_path(temp_user_data)
         co.set_argument("--no-sandbox")
         co.set_argument("--disable-dev-shm-usage")
         co.set_argument("--disable-blink-features=AutomationControlled")
         co.set_argument("--lang=zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7")
         co.set_user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
         co.set_argument("--window-size=1920,1080")
-        co.set_argument("--start-maximized")
 
         page = ChromiumPage(addr_or_opts=co)
         
-        # 透過 CDP 於新文檔中全面移除 navigator.webdriver 標記
         try:
             page.run_cdp("Page.addScriptToEvaluateOnNewDocument", source="""
                 Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
@@ -404,7 +373,7 @@ class TPEXCloudCrawler:
         page.listen.start(["afterTrading", "brokerBS"])
         page.get(self.TPEX_URL, retry=3, timeout=30)
         time.sleep(2.5)
-        return page, None
+        return page, temp_user_data
 
     def crawl_stocks(
         self,
@@ -413,6 +382,8 @@ class TPEXCloudCrawler:
     ) -> Tuple[List[pd.DataFrame], List[str]]:
         """雲端單會話極速穩健抓取 (移植 Local 100% 成功之 Turnstile 門禁與自癒架構)"""
         import json
+        import shutil
+
         if not stock_codes:
             return [], []
 
@@ -423,13 +394,40 @@ class TPEXCloudCrawler:
         temp_user_data = None
         processed_symbols = set()
 
+        def _cleanup_browser(p, u_data):
+            try:
+                if p: p.quit()
+            except Exception:
+                pass
+            if u_data and os.path.exists(u_data):
+                try: shutil.rmtree(u_data, ignore_errors=True)
+                except Exception: pass
+            if sys.platform.startswith("linux"):
+                os.system("pkill -9 -f 'chrome|chromium' 2>/dev/null || true")
+
         try:
             print(f"[*] 正在啟動 TPEX 雲端持久化引擎 (待抓取: {total} 檔)...")
             page, temp_user_data = self._launch_browser_session()
 
             # 首次載入頁面並預熱 Turnstile
-            page.get(self.TPEX_URL, retry=3, timeout=30)
-            time.sleep(2.5)
+            init_tok = None
+            for _ in range(30):
+                init_tok = page.run_js("""
+                    if (typeof window.turnstile !== 'undefined' && window.turnstile.getResponse) {
+                        const r = window.turnstile.getResponse();
+                        if (r && r.length > 50) return r;
+                    }
+                    const el = document.querySelector('form.formblock input[name="cf-turnstile-response"]') || document.querySelector('input[name="cf-turnstile-response"]');
+                    return el ? (el.value || '') : '';
+                """)
+                if init_tok and len(init_tok) > 50:
+                    break
+                time.sleep(0.3)
+
+            if init_tok and len(init_tok) > 50:
+                print(f"[*] 首頁 Cloudflare Turnstile 授權完成 (Token 長度: {len(init_tok)})，開始執行個股採集。")
+            else:
+                print("[*] 首頁載入完成，進入個股查詢迴圈。")
 
             start_t = time.time()
 
@@ -438,11 +436,10 @@ class TPEXCloudCrawler:
                 try:
                     # 每 60 檔主動優雅重啟一次 Chrome，清空 DevTools 記憶體與 Session
                     if idx > 1 and (idx - 1) % 60 == 0:
-                        try: page.quit()
-                        except Exception: pass
+                        print(f"[*] [定期自癒] 已完成 {idx} 檔，優雅重啟 Chrome 會話釋放資源...")
+                        _cleanup_browser(page, temp_user_data)
+                        time.sleep(1.5)
                         page, temp_user_data = self._launch_browser_session()
-                        page.get(self.TPEX_URL, retry=3, timeout=30)
-                        time.sleep(2.0)
 
                     for attempt in range(1, 4):
                         try:
@@ -463,11 +460,10 @@ class TPEXCloudCrawler:
 
                             # 2. 換發全新 Turnstile Token (前置門禁強檢)
                             token_ready = False
-                            for _i in range(35):
+                            for _i in range(30):
                                 if _i == 0 or _i % 6 == 0:
                                     page.run_js("if (window.turnstile) { try { if (window.turnstile.execute) window.turnstile.execute(); } catch(e){} }")
-                                    self._try_solve_turnstile(page)
-                                time.sleep(0.3)
+                                time.sleep(0.25)
                                 tok = page.run_js("""
                                     if (typeof window.turnstile !== 'undefined' && window.turnstile.getResponse) {
                                         const r = window.turnstile.getResponse();
@@ -482,8 +478,7 @@ class TPEXCloudCrawler:
 
                             if not token_ready:
                                 page.get(self.TPEX_URL, retry=2, timeout=25)
-                                time.sleep(2.5)
-                                self._try_solve_turnstile(page)
+                                time.sleep(2.0)
                                 page.run_js(f"""
                                     const inp = document.querySelector('input.code') || document.querySelector('[name=code]');
                                     if (inp) {{
@@ -492,10 +487,8 @@ class TPEXCloudCrawler:
                                         inp.dispatchEvent(new Event('change', {{ bubbles: true }}));
                                     }}
                                 """)
-                                for _i in range(40):
-                                    if _i % 6 == 0:
-                                        self._try_solve_turnstile(page)
-                                    time.sleep(0.3)
+                                for _ in range(25):
+                                    time.sleep(0.25)
                                     tok = page.run_js("""
                                         if (typeof window.turnstile !== 'undefined' && window.turnstile.getResponse) {
                                             const r = window.turnstile.getResponse();
@@ -510,26 +503,19 @@ class TPEXCloudCrawler:
 
                             if not token_ready:
                                 if attempt < 3:
-                                    time.sleep(1.5)
+                                    time.sleep(1.0)
                                 continue
 
                             # 3. 清空監聽佇列並點擊查詢按鈕
                             page.listen.clear()
-                            q_btn = page.ele('css:form.formblock button[type="submit"]') or page.ele('css:div.tables-tools button[type="submit"]')
-                            if q_btn:
-                                try:
-                                    q_btn.click()
-                                except Exception:
-                                    page.run_js("const b = document.querySelector('form.formblock button[type=\"submit\"]'); if (b) b.click();")
-                            else:
-                                page.run_js("""
-                                    const btn = document.querySelector('form.formblock button[type="submit"]') || 
-                                                document.querySelector('div.tables-tools button[type="submit"]') ||
-                                                Array.from(document.querySelectorAll('button')).find(b => (b.innerText||'').trim() === '查詢');
-                                    if (btn) btn.click();
-                                """)
+                            page.run_js("""
+                                const btn = document.querySelector('form.formblock button[type="submit"]') || 
+                                            document.querySelector('div.tables-tools button[type="submit"]') ||
+                                            Array.from(document.querySelectorAll('button')).find(b => (b.innerText||'').trim() === '查詢');
+                                if (btn) btn.click();
+                            """)
 
-                            pkt = page.listen.wait(timeout=25)
+                            pkt = page.listen.wait(timeout=20)
                             ts_res = get_taipei_now().strftime("%H:%M:%S")
 
                             # 觸發 Turnstile 背景重簽
@@ -566,36 +552,34 @@ class TPEXCloudCrawler:
                                     else:
                                         print(f"[{ts_res}]   [上櫃 {idx}/{total}] [無成交明細/略過] {sym}")
                                     success_crawl = True
-                                    time.sleep(0.5)
+                                    time.sleep(0.4)
                                     break
                                 elif str(body.get("status")) == "520" or "520" in str(body.get("title", "")):
-                                    time.sleep(2.0 + attempt * 1.5)
+                                    time.sleep(1.5 + attempt * 1.0)
                                     continue
                                 elif "stat" in body and ("查無" in str(body["stat"]) or "無交易" in str(body["stat"]) or "無符合" in str(body["stat"])):
                                     print(f"[{ts_res}]   [上櫃 {idx}/{total}] [無成交/略過] {sym}")
                                     success_crawl = True
-                                    time.sleep(0.5)
+                                    time.sleep(0.4)
                                     break
                                 else:
                                     # 遭遇操作逾時等非預期回應時刷新頁面
                                     page.get(self.TPEX_URL, retry=2, timeout=25)
-                                    time.sleep(2.0)
+                                    time.sleep(1.5)
                                     continue
 
                             if attempt < 3:
-                                time.sleep(1.0)
+                                time.sleep(0.8)
 
                         except Exception as e:
                             # 發生瀏覽器連線斷開時，自動重啟瀏覽器
                             if "Disconnected" in str(type(e)) or "Connection" in str(type(e)):
-                                try: page.quit()
-                                except Exception: pass
+                                _cleanup_browser(page, temp_user_data)
+                                time.sleep(1.5)
                                 page, temp_user_data = self._launch_browser_session()
-                                page.get(self.TPEX_URL, retry=3, timeout=30)
-                                time.sleep(2.5)
 
                             if attempt < 3:
-                                time.sleep(1.0)
+                                time.sleep(0.8)
 
                     processed_symbols.add(sym)
                     if not success_crawl:
@@ -618,11 +602,7 @@ class TPEXCloudCrawler:
             if unprocessed:
                 failed_symbols.extend(unprocessed)
                 print(f"[*] TPEX 雲端兜底保護：已自動將 {len(unprocessed)} 檔剩餘未執行標的加入補抓清單。")
-            if page:
-                try: page.quit()
-                except Exception: pass
-            if temp_user_data:
-                shutil.rmtree(temp_user_data, ignore_errors=True)
+            _cleanup_browser(page, temp_user_data)
 
         return collected_dfs, failed_symbols
 
