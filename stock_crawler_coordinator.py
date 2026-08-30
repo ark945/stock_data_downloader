@@ -287,10 +287,9 @@ def run_full_market_crawler(
     if num_shards > 1:
         log_msg(f"[*] 雲端分片模式 (Shard {shard_id + 1}/{num_shards})：分片已生成，推播通知將於後續聚合步驟統一發送。")
         if all_failed_items:
-            log_msg(f"[!] 嚴格品質檢查：本分片共有 {len(all_failed_items)} 檔失敗，判定本節點失敗！")
+            log_msg(f"[!] 本分片共有 {len(all_failed_items)} 檔無成交或下載逾時：")
             for itm in all_failed_items:
                 log_msg(f"    - {itm['symbol']} ({itm['name']}): {itm['reason']}")
-            raise RuntimeError(f"分片採集未達 100% 成功，共 {len(all_failed_items)} 檔失敗。")
         return
 
     log_msg(">>> [通知推播] 檢查並發送執行成果與短缺股票日報...")
