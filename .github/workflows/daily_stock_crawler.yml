@@ -137,18 +137,18 @@ jobs:
           retention-days: 1
 
   # -----------------------------------------------------------------
-  # TPEX 上櫃：20 個獨立 shard 矩陣並行；每 shard ~50 檔搭配 6s 錯峰啟動，安全避開 Cloudflare 限流
+  # TPEX 上櫃：8 個獨立 shard 矩陣並行；每 shard ~125 檔搭配 15s 錯峰啟動與 3.5s 間隔，完美避開 TPEX 限流
   # -----------------------------------------------------------------
   tpex-shards:
     name: TPEX-上櫃-分片-${{ matrix.shard }}
     needs: pre-check
     if: ${{ needs.pre-check.outputs.should_skip != 'true' && (github.event_name == 'schedule' || github.event.inputs.market == 'all' || github.event.inputs.market == 'tpex' || github.event.inputs.market == '') }}
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
 
     steps:
       - name: 檢出專案代碼 (Checkout)
@@ -189,7 +189,7 @@ jobs:
             pip install -r stock_data_downloader/requirements.txt
           fi
 
-      - name: 執行 TPEX 上櫃分片爬蟲 (Shard ${{ matrix.shard }}/20)
+      - name: 執行 TPEX 上櫃分片爬蟲 (Shard ${{ matrix.shard }}/8)
         env:
           DISPLAY: ":99"
           PYTHONIOENCODING: "utf-8"
@@ -202,13 +202,13 @@ jobs:
             TARGET_SCRIPT="stock_data_downloader/stock_crawler_coordinator.py"
           fi
 
-          # 20 分片錯峰啟動 (每分片錯開 6s) 避免同時撞擊 TPEX 首頁
-          sleep $(( ${{ matrix.shard }} * 6 ))
+          # 8 分片錯峰啟動 (每分片錯開 15s) 避免同時撞擊 TPEX 首頁與 Session 握手
+          sleep $(( ${{ matrix.shard }} * 15 ))
 
           if [ -n "$TARGET_DATE" ]; then
-            python "$TARGET_SCRIPT" --market tpex --date "$TARGET_DATE" --workers 1 --max-rounds 3 --shard-id ${{ matrix.shard }} --num-shards 20 --no-excel
+            python "$TARGET_SCRIPT" --market tpex --date "$TARGET_DATE" --workers 1 --max-rounds 3 --shard-id ${{ matrix.shard }} --num-shards 8 --no-excel
           else
-            python "$TARGET_SCRIPT" --market tpex --workers 1 --max-rounds 3 --shard-id ${{ matrix.shard }} --num-shards 20 --no-excel
+            python "$TARGET_SCRIPT" --market tpex --workers 1 --max-rounds 3 --shard-id ${{ matrix.shard }} --num-shards 8 --no-excel
           fi
 
       - name: 上傳 TPEX 分片產物 (Parquet 與 Log)
