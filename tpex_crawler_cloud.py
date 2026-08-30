@@ -102,9 +102,12 @@ class TPEXCloudCrawler:
             raw_symbols = ["6488", "6117", "3293", "8069", "5483", "3131", "6274", "3529", "8299", "6180"]
 
         unique_symbols = sorted(list(dict.fromkeys(raw_symbols)))
-        common_stocks = [s for s in unique_symbols if re.match(r"^[1-9][0-9]{3}[A-Za-z]?$", s)]
-        etf_and_bonds = [s for s in unique_symbols if s.startswith("00") or s not in common_stocks]
-        return common_stocks + etf_and_bonds
+        # 僅保留真正的上櫃主板個股 (排除債券 ETF 與 77/78 開頭之興櫃股票，因該等標的無 brokerBS 日報表)
+        mainboard_stocks = [
+            s for s in unique_symbols 
+            if re.match(r"^[1-9][0-9]{3}[A-Za-z]?$", s) and not (s.startswith("77") or s.startswith("78"))
+        ]
+        return mainboard_stocks
 
     def parse_tpex_json_to_dataframe(self, json_data: dict, stock_id: str, trade_date: str) -> Optional[pd.DataFrame]:
         """解析 TPEX API JSON 封包為標準 13 欄位 DataFrame"""
@@ -389,9 +392,9 @@ class TPEXCloudCrawler:
             print(f"[*] 正在啟動 TPEX 雲端持久化引擎 (待抓取: {total} 檔)...")
             page, temp_user_data = self._launch_browser_session()
 
-            # 首次載入頁面並預熱 Turnstile (驗證配置)
+            # 首次載入頁面並完整預熱 Turnstile 與 Session (4.0 秒)
             page.get(self.TPEX_URL, retry=3, timeout=30)
-            time.sleep(2.5)
+            time.sleep(4.0)
 
             start_t = time.time()
             consecutive_fails = 0
@@ -412,7 +415,7 @@ class TPEXCloudCrawler:
                         time.sleep(2.5)
                         page, temp_user_data = self._launch_browser_session()
                         page.get(self.TPEX_URL, retry=3, timeout=30)
-                        time.sleep(3.0)
+                        time.sleep(4.0)
                         last_used_tok = ""
 
                     for attempt in range(1, 4):
@@ -420,18 +423,20 @@ class TPEXCloudCrawler:
                             # 1. 確保在目標頁面
                             if "brokerBS.html" not in (page.url or "") or "search.html" in (page.url or ""):
                                 page.get(self.TPEX_URL, retry=2, timeout=20)
-                                time.sleep(1.5)
+                                time.sleep(3.0)
                                 last_used_tok = ""
 
                             # 填入股票代碼
                             page.run_js(f"""
                                 const inp = document.querySelector('input.code') || document.querySelector('[name=code]');
                                 if (inp) {{
+                                    inp.focus();
                                     inp.value = '{sym}';
                                     inp.dispatchEvent(new Event('input', {{ bubbles: true }}));
                                     inp.dispatchEvent(new Event('change', {{ bubbles: true }}));
                                 }}
                             """)
+                            time.sleep(0.3)
 
                             # 2. 取得全新未被消耗的 Turnstile Token
                             token_ready = False
@@ -455,11 +460,12 @@ class TPEXCloudCrawler:
 
                             if not token_ready:
                                 page.get(self.TPEX_URL, retry=2, timeout=25)
-                                time.sleep(2.5)
+                                time.sleep(3.5)
                                 last_used_tok = ""
                                 page.run_js(f"""
                                     const inp = document.querySelector('input.code') || document.querySelector('[name=code]');
                                     if (inp) {{
+                                        inp.focus();
                                         inp.value = '{sym}';
                                         inp.dispatchEvent(new Event('input', {{ bubbles: true }}));
                                         inp.dispatchEvent(new Event('change', {{ bubbles: true }}));
@@ -540,27 +546,27 @@ class TPEXCloudCrawler:
                                         print(f"[{ts_res}]   [上櫃 {idx}/{total}] [無成交明細/略過] {sym}")
                                     success_crawl = True
                                     consecutive_fails = 0
-                                    time.sleep(0.4)
+                                    time.sleep(1.2)
                                     break
                                 elif str(body.get("status")) == "520" or "520" in str(body.get("title", "")):
-                                    time.sleep(1.5 + attempt * 1.0)
+                                    time.sleep(2.0 + attempt * 1.0)
                                     continue
                                 elif "stat" in body and ("查無" in str(body["stat"]) or "無交易" in str(body["stat"]) or "無符合" in str(body["stat"])):
                                     print(f"[{ts_res}]   [上櫃 {idx}/{total}] [無成交/略過] {sym}")
                                     success_crawl = True
                                     consecutive_fails = 0
-                                    time.sleep(0.4)
+                                    time.sleep(1.2)
                                     break
                                 else:
                                     stat_msg = body.get("stat") or body.get("message") or str(body)[:60]
                                     print(f"[{ts_res}]   [上櫃 {idx}/{total}] [非預期回應: {stat_msg}] {sym} (重試 {attempt}/3)")
                                     page.get(self.TPEX_URL, retry=2, timeout=25)
-                                    time.sleep(1.5)
+                                    time.sleep(3.5)
                                     last_used_tok = ""
                                     continue
 
                             if attempt < 3:
-                                time.sleep(0.8)
+                                time.sleep(1.2)
 
                         except Exception as e:
                             # 發生瀏覽器連線斷開時，自動重啟瀏覽器
@@ -569,11 +575,11 @@ class TPEXCloudCrawler:
                                 time.sleep(1.5)
                                 page, temp_user_data = self._launch_browser_session()
                                 page.get(self.TPEX_URL, retry=3, timeout=30)
-                                time.sleep(2.0)
+                                time.sleep(3.5)
                                 last_used_tok = ""
 
                             if attempt < 3:
-                                time.sleep(0.8)
+                                time.sleep(1.2)
 
                     processed_symbols.add(sym)
                     if not success_crawl:
