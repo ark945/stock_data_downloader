@@ -412,10 +412,12 @@ class TPEXCloudCrawler:
             for idx, sym in enumerate(stock_codes, 1):
                 success_crawl = False
                 try:
-                    # 智慧自癒熔斷：若連續失敗達 3 次，立刻徹底重構全新瀏覽器會話與 WARP 通道
+                    # 智慧自癒熔斷：若連續失敗達 3 次，立刻輪換 WARP 出口 IP 並徹底重構全新瀏覽器會話
                     if consecutive_fails >= 3:
-                        print(f"[*] [即時自癒] 偵測到連續失敗 {consecutive_fails} 次，立即重啟 Chromium 會話並重新載入首頁...")
+                        print(f"[*] [即時自癒] 偵測到連續失敗 {consecutive_fails} 次，輪換 WARP 出口 IP 並重啟 Chromium 會話...")
                         _cleanup_browser(page, temp_user_data)
+                        if sys.platform.startswith("linux"):
+                            os.system("warp-cli --accept-tos disconnect 2>/dev/null; sleep 1; warp-cli --accept-tos connect 2>/dev/null || true")
                         time.sleep(2.0)
                         page, temp_user_data = self._launch_browser_session()
                         page.get(self.TPEX_URL, retry=3, timeout=30)
