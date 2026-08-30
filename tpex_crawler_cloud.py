@@ -401,11 +401,8 @@ class TPEXCloudCrawler:
                         time.sleep(1.5)
                         page, temp_user_data = self._launch_browser_session()
 
-                    # 智慧自癒熔斷：若連續失敗達 3 次，立刻輪換 WARP 出口 IP 並徹底重構全新瀏覽器會話
+                    # 智慧自癒：若連續失敗達 3 次，輪換 WARP 出口 IP 並徹底重構全新瀏覽器會話
                     if consecutive_fails >= 3:
-                        if consecutive_fails >= 6:
-                            print(f"[!] 連續失敗達 {consecutive_fails} 次，觸發安全熔斷中止本輪採集。")
-                            break
                         print(f"[*] [即時自癒] 偵測到連續失敗 {consecutive_fails} 次，輪換 WARP 出口 IP 並重啟 Chromium 會話...")
                         _cleanup_browser(page, temp_user_data)
                         if sys.platform.startswith("linux"):
