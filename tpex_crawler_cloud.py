@@ -407,18 +407,20 @@ class TPEXCloudCrawler:
                 print(f"[*] 診斷例外: {diag_e}")
 
             start_t = time.time()
+            consecutive_fails = 0
 
             for idx, sym in enumerate(stock_codes, 1):
                 success_crawl = False
                 try:
-                    # 每 60 檔主動優雅重啟一次 Chrome，清空 DevTools 記憶體與 Session
-                    if idx > 1 and (idx - 1) % 60 == 0:
-                        print(f"[*] [定期自癒] 已完成 {idx} 檔，優雅重啟 Chrome 會話釋放資源...")
+                    # 智慧自癒熔斷：若連續失敗達 3 次，立刻徹底重構全新瀏覽器會話與 WARP 通道
+                    if consecutive_fails >= 3:
+                        print(f"[*] [即時自癒] 偵測到連續失敗 {consecutive_fails} 次，立即重啟 Chromium 會話並重新載入首頁...")
                         _cleanup_browser(page, temp_user_data)
-                        time.sleep(1.5)
+                        time.sleep(2.0)
                         page, temp_user_data = self._launch_browser_session()
                         page.get(self.TPEX_URL, retry=3, timeout=30)
-                        time.sleep(2.0)
+                        time.sleep(2.5)
+                        consecutive_fails = 0
 
                     for attempt in range(1, 4):
                         try:
@@ -538,6 +540,7 @@ class TPEXCloudCrawler:
                                     else:
                                         print(f"[{ts_res}]   [上櫃 {idx}/{total}] [無成交明細/略過] {sym}")
                                     success_crawl = True
+                                    consecutive_fails = 0
                                     time.sleep(0.4)
                                     break
                                 elif str(body.get("status")) == "520" or "520" in str(body.get("title", "")):
@@ -546,6 +549,7 @@ class TPEXCloudCrawler:
                                 elif "stat" in body and ("查無" in str(body["stat"]) or "無交易" in str(body["stat"]) or "無符合" in str(body["stat"])):
                                     print(f"[{ts_res}]   [上櫃 {idx}/{total}] [無成交/略過] {sym}")
                                     success_crawl = True
+                                    consecutive_fails = 0
                                     time.sleep(0.4)
                                     break
                                 else:
@@ -563,12 +567,15 @@ class TPEXCloudCrawler:
                                 _cleanup_browser(page, temp_user_data)
                                 time.sleep(1.5)
                                 page, temp_user_data = self._launch_browser_session()
+                                page.get(self.TPEX_URL, retry=3, timeout=30)
+                                time.sleep(2.0)
 
                             if attempt < 3:
                                 time.sleep(0.8)
 
                     processed_symbols.add(sym)
                     if not success_crawl:
+                        consecutive_fails += 1
                         ts_res = get_taipei_now().strftime("%H:%M:%S")
                         failed_symbols.append(sym)
                         print(f"[{ts_res}]   [上櫃 {idx}/{total}] [採集失敗/已記錄待補抓] {sym}")
