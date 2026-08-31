@@ -1,7 +1,7 @@
 """
 TPEX 證券櫃檯買賣中心（上櫃股票）券商買賣日報表爬蟲 — 雲端海外 Runner 專用模組 (Cloud / CI)
 特點：
-1. 專為 GitHub Actions 20 節點海外矩陣分片設計 (每節點約處理 50 檔)
+1. 專為 GitHub Actions 8 節點海外矩陣分片設計 (每節點約處理 125 檔)
 2. 單一純淨持久 Chromium Session，避免海外 IP 反覆重啟撞擊 Cloudflare
 3. 嚴格控管 4 分鐘 Turnstile Token 生命週期與連續失敗安全熔斷
 4. 以實體「下載 CSV」按鈕作為精準判定，杜絕模糊文字誤殺
@@ -285,11 +285,12 @@ class TPEXCloudCrawler:
             print(f"[!] 解析 TPEX CSV 失敗 ({stock_id}): {e}")
             return None
 
-    def _wait_token(self, page, timeout: float = 12.0) -> str:
-        """等待並提取 Cloudflare Turnstile 授權 Token"""
+    def _wait_token(self, page, timeout: float = 30.0, last_used_token: str = "") -> str:
+        """等待並提取全新 Cloudflare Turnstile 授權 Token"""
         start_wait = time.time()
         while time.time() - start_wait < timeout:
             try:
+                page.run_js("if (window.turnstile && window.turnstile.execute) { try { window.turnstile.execute(); } catch(e){} }")
                 t = page.run_js("""
                     let tok = '';
                     const el = document.querySelector('input[name="cf-turnstile-response"]') || 
@@ -303,18 +304,31 @@ class TPEXCloudCrawler:
                     }
                     return tok || '';
                 """)
-                if t and len(t) > 20:
+                if t and len(t) > 50 and t != last_used_token:
                     return t
             except Exception:
                 pass
-            time.sleep(0.3)
+            time.sleep(0.5)
         return ""
 
+    def _clear_turnstile_token(self, page) -> None:
+        """清空已送出的 Turnstile token，避免下一檔重複提交舊 token"""
+        try:
+            page.run_js("""
+                const els = document.querySelectorAll('input[name="cf-turnstile-response"]');
+                els.forEach(el => { el.value = ''; });
+                if (window.turnstile) {
+                    try { window.turnstile.reset(); } catch(e) {}
+                }
+            """)
+        except Exception:
+            pass
+
     # ---------------- 參數配置 ----------------
-    TOKEN_TIMEOUT = 10          # 單檔等待 Turnstile Token 上限 (秒)
-    PER_STOCK_TIMEOUT = 15      # 單檔等待 API JSON 回應封包上限 (秒)
-    MIN_INTER_STOCK_DELAY = 0.5 # 檔間平穩微延遲下限 (秒)
-    MAX_INTER_STOCK_DELAY = 1.0 # 檔間平穩微延遲上限 (秒)
+    TOKEN_TIMEOUT = 30          # 單檔等待全新 Turnstile Token 上限 (秒)
+    PER_STOCK_TIMEOUT = 35      # 單檔等待 API JSON 回應封包上限 (秒)
+    MIN_INTER_STOCK_DELAY = 2.0 # 檔間平穩微延遲下限 (秒)
+    MAX_INTER_STOCK_DELAY = 3.5 # 檔間平穩微延遲上限 (秒)
     PAGE_READY_WAIT = 25        # 首頁 / 重載後等待 Token 簽發上限 (秒)
 
     def _click_query(self, page) -> None:
@@ -355,7 +369,8 @@ class TPEXCloudCrawler:
         page = ChromiumPage(addr_or_opts=co)
         page.listen.start(["afterTrading", "brokerBS"])
         page.get(self.TPEX_URL, retry=3, timeout=30)
-        time.sleep(4.0)
+        initial_token = self._wait_token(page, timeout=self.PAGE_READY_WAIT)
+        print(f"[*] TPEX 首頁 Session 預熱完成，初始 Token 長度: {len(initial_token)}")
         return page, None
 
     def crawl_stocks(
@@ -391,6 +406,7 @@ class TPEXCloudCrawler:
 
             start_t = time.time()
             consecutive_fails = 0
+            last_used_token = ""
             ci_abort_after_raw = os.environ.get("TPEX_CI_ABORT_AFTER_CONSECUTIVE_FAILURES", "5").strip()
             ci_abort_after = int(ci_abort_after_raw) if ci_abort_after_raw.isdigit() else 5
             ci_fast_fail = os.environ.get("GITHUB_ACTIONS") == "true" or os.environ.get("CI") == "true"
@@ -431,29 +447,12 @@ class TPEXCloudCrawler:
                                 }}
                             """)
 
-                            # 2. 取得 Turnstile Token
-                            token_ready = False
-                            current_tok = ""
-                            for _i in range(35):
-                                if _i == 0 or _i % 6 == 0:
-                                    page.run_js("if (window.turnstile) { try { if (window.turnstile.execute) window.turnstile.execute(); } catch(e){} }")
-                                time.sleep(0.3)
-                                tok = page.run_js("""
-                                    if (typeof window.turnstile !== 'undefined' && window.turnstile.getResponse) {
-                                        const r = window.turnstile.getResponse();
-                                        if (r && r.length > 50) return r;
-                                    }
-                                    const el = document.querySelector('form.formblock input[name="cf-turnstile-response"]') || document.querySelector('input[name="cf-turnstile-response"]');
-                                    return el ? (el.value || '') : '';
-                                """)
-                                if tok and len(tok) > 50:
-                                    token_ready = True
-                                    current_tok = tok
-                                    break
+                            # 2. 取得全新 Turnstile Token；未取得時嚴禁點擊查詢
+                            current_tok = self._wait_token(page, timeout=self.TOKEN_TIMEOUT, last_used_token=last_used_token)
 
-                            if not token_ready:
+                            if not current_tok:
                                 page.get(self.TPEX_URL, retry=2, timeout=25)
-                                time.sleep(3.0)
+                                time.sleep(4.0)
                                 page.run_js(f"""
                                     const inp = document.querySelector('input.code') || document.querySelector('[name=code]');
                                     if (inp) {{
@@ -462,22 +461,9 @@ class TPEXCloudCrawler:
                                         inp.dispatchEvent(new Event('change', {{ bubbles: true }}));
                                     }}
                                 """)
-                                for _ in range(45):
-                                    time.sleep(0.3)
-                                    tok = page.run_js("""
-                                        if (typeof window.turnstile !== 'undefined' && window.turnstile.getResponse) {
-                                            const r = window.turnstile.getResponse();
-                                            if (r && r.length > 50) return r;
-                                        }
-                                        const el = document.querySelector('form.formblock input[name="cf-turnstile-response"]') || document.querySelector('input[name="cf-turnstile-response"]');
-                                        return el ? (el.value || '') : '';
-                                    """)
-                                    if tok and len(tok) > 50:
-                                        token_ready = True
-                                        current_tok = tok
-                                        break
+                                current_tok = self._wait_token(page, timeout=self.PAGE_READY_WAIT, last_used_token=last_used_token)
 
-                            if not token_ready:
+                            if not current_tok:
                                 last_failure_reason = "Turnstile Token 逾時"
                                 if attempt < 3:
                                     time.sleep(1.5)
@@ -499,11 +485,10 @@ class TPEXCloudCrawler:
                                     if (btn) btn.click();
                                 """)
 
-                            pkt = page.listen.wait(timeout=25)
+                            last_used_token = current_tok
+                            self._clear_turnstile_token(page)
+                            pkt = page.listen.wait(timeout=self.PER_STOCK_TIMEOUT)
                             ts_res = get_taipei_now().strftime("%H:%M:%S")
-
-                            # 觸發 Turnstile 背景重簽
-                            page.run_js("if (window.turnstile) try { window.turnstile.reset(); } catch(e){}")
 
                             if not pkt:
                                 last_failure_reason = "API 封包逾時"
