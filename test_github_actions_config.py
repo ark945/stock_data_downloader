@@ -31,6 +31,7 @@ def test_daily_workflow_uses_current_sharding() -> None:
     assert "needs.tpex-canary.result == 'success'" in text
     assert "requirements_tpex_cloud.txt" in text
     assert "shard: [1, 2, 3, 4, 5, 6, 7]" in text
+    assert "max-parallel: 1" in text
     assert "name: tpex-shard-0" in text
     assert "--num-shards 8" in text
     assert "TPEX_CI_ABORT_AFTER_CONSECUTIVE_FAILURES" in text

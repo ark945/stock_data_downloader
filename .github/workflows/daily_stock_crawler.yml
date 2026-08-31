@@ -302,7 +302,7 @@ jobs:
           retention-days: 1
 
   # -----------------------------------------------------------------
-  # TPEX 上櫃：8 個獨立 shard 矩陣並行；每 shard ~125 檔搭配 15s 錯峰啟動與 3.5s 間隔，完美避開 TPEX 限流
+  # TPEX 上櫃：canary 成功後依序執行剩餘 shard；避免多 Runner 同時觸發 TPEX 後端保護性逾時
   # -----------------------------------------------------------------
   tpex-shards:
     name: TPEX-上櫃-分片-${{ matrix.shard }}
@@ -312,6 +312,7 @@ jobs:
     timeout-minutes: 40
     strategy:
       fail-fast: false
+      max-parallel: 1
       matrix:
         shard: [1, 2, 3, 4, 5, 6, 7]
 
