@@ -194,6 +194,7 @@ jobs:
           DISPLAY: ":99"
           PYTHONIOENCODING: "utf-8"
           PYTHONUNBUFFERED: "1"
+          TPEX_CI_ABORT_AFTER_CONSECUTIVE_FAILURES: "3"
           TARGET_DATE: ${{ github.event.inputs.target_date || needs.pre-check.outputs.target_date }}
         run: |
           if [ -f "stock_crawler_coordinator.py" ]; then
@@ -206,9 +207,9 @@ jobs:
           sleep $(( ${{ matrix.shard }} * 15 ))
 
           if [ -n "$TARGET_DATE" ]; then
-            python "$TARGET_SCRIPT" --market tpex --date "$TARGET_DATE" --workers 1 --max-rounds 3 --shard-id ${{ matrix.shard }} --num-shards 8 --no-excel
+            python "$TARGET_SCRIPT" --market tpex --date "$TARGET_DATE" --workers 1 --max-rounds 1 --shard-id ${{ matrix.shard }} --num-shards 8 --no-excel
           else
-            python "$TARGET_SCRIPT" --market tpex --workers 1 --max-rounds 3 --shard-id ${{ matrix.shard }} --num-shards 8 --no-excel
+            python "$TARGET_SCRIPT" --market tpex --workers 1 --max-rounds 1 --shard-id ${{ matrix.shard }} --num-shards 8 --no-excel
           fi
 
       - name: 上傳 TPEX 分片產物 (Parquet 與 Log)

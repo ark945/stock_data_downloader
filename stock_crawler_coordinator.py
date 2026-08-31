@@ -215,7 +215,7 @@ def run_full_market_crawler(
         tpex_dfs, tpex_failed = tpex_crawler.crawl_stocks_with_retry(
             stock_codes=tpex_symbols,
             trade_date=trade_date,
-            max_rounds=3,
+            max_rounds=max_rounds,
             workers=actual_tpex_w
         )
         collected_dfs.extend(tpex_dfs)
