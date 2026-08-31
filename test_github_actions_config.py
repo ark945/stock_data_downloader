@@ -29,6 +29,8 @@ def test_daily_workflow_uses_current_sharding() -> None:
     assert "--limit-symbols 5" in text
     assert "TPEX_PROBE_ATTEMPTS" in text
     assert "TPEX_PROBE_RETRY_COOLDOWN_SECONDS" in text
+    assert "TPEX_SHARD_ATTEMPTS" in text
+    assert "TPEX_SHARD_RETRY_COOLDOWN_SECONDS" in text
     assert "needs.tpex-probe.result == 'success'" in text
     assert "needs.tpex-canary.result == 'success'" in text
     assert "requirements_tpex_cloud.txt" in text

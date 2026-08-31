@@ -302,6 +302,8 @@ jobs:
           PYTHONIOENCODING: "utf-8"
           PYTHONUNBUFFERED: "1"
           TPEX_CI_ABORT_AFTER_CONSECUTIVE_FAILURES: "0"
+          TPEX_SHARD_ATTEMPTS: "2"
+          TPEX_SHARD_RETRY_COOLDOWN_SECONDS: "300"
           TARGET_DATE: ${{ github.event.inputs.target_date || needs.pre-check.outputs.target_date }}
         run: |
           if [ -f "stock_crawler_coordinator.py" ]; then
@@ -310,11 +312,36 @@ jobs:
             TARGET_SCRIPT="stock_data_downloader/stock_crawler_coordinator.py"
           fi
 
-          if [ -n "$TARGET_DATE" ]; then
-            python "$TARGET_SCRIPT" --market tpex --date "$TARGET_DATE" --workers 1 --max-rounds 3 --shard-id 0 --num-shards 8 --no-excel
-          else
-            python "$TARGET_SCRIPT" --market tpex --workers 1 --max-rounds 3 --shard-id 0 --num-shards 8 --no-excel
-          fi
+          ATTEMPTS="${TPEX_SHARD_ATTEMPTS:-2}"
+          COOLDOWN="${TPEX_SHARD_RETRY_COOLDOWN_SECONDS:-300}"
+          set +e
+          for attempt in $(seq 1 "$ATTEMPTS"); do
+            echo "[*] TPEX canary shard attempt ${attempt}/${ATTEMPTS}"
+            if [ -n "$TARGET_DATE" ]; then
+              python "$TARGET_SCRIPT" --market tpex --date "$TARGET_DATE" --workers 1 --max-rounds 3 --shard-id 0 --num-shards 8 --no-excel
+            else
+              python "$TARGET_SCRIPT" --market tpex --workers 1 --max-rounds 3 --shard-id 0 --num-shards 8 --no-excel
+            fi
+            rc=$?
+            if [ "$rc" -eq 0 ]; then
+              echo "[✓] TPEX canary shard attempt ${attempt}/${ATTEMPTS} passed."
+              exit 0
+            fi
+
+            echo "[!] TPEX canary shard attempt ${attempt}/${ATTEMPTS} failed with exit code ${rc}."
+            if [ "$attempt" -lt "$ATTEMPTS" ]; then
+              echo "[*] Cooling down ${COOLDOWN}s and rotating WARP/Chromium before retrying canary shard..."
+              rm -rf output/*.parquet output/logs/crawler_tpex_shard_0.log logs/crawler_tpex_shard_0.log downloads_tpex_cloud || true
+              pkill -9 -f 'chrome|chromium' 2>/dev/null || true
+              warp-cli --accept-tos disconnect 2>/dev/null || true
+              sleep 8
+              warp-cli --accept-tos connect 2>/dev/null || true
+              sleep "$COOLDOWN"
+            fi
+          done
+
+          echo "[!] TPEX canary shard failed after ${ATTEMPTS} attempts."
+          exit 1
 
       - name: 上傳 TPEX 金絲雀分片產物 (Parquet 與 Log)
         if: always()
@@ -391,6 +418,8 @@ jobs:
           PYTHONIOENCODING: "utf-8"
           PYTHONUNBUFFERED: "1"
           TPEX_CI_ABORT_AFTER_CONSECUTIVE_FAILURES: "0"
+          TPEX_SHARD_ATTEMPTS: "2"
+          TPEX_SHARD_RETRY_COOLDOWN_SECONDS: "300"
           TARGET_DATE: ${{ github.event.inputs.target_date || needs.pre-check.outputs.target_date }}
         run: |
           if [ -f "stock_crawler_coordinator.py" ]; then
@@ -402,11 +431,36 @@ jobs:
           # 8 分片錯峰啟動 (每分片錯開 15s) 避免同時撞擊 TPEX 首頁與 Session 握手
           sleep $(( ${{ matrix.shard }} * 15 ))
 
-          if [ -n "$TARGET_DATE" ]; then
-            python "$TARGET_SCRIPT" --market tpex --date "$TARGET_DATE" --workers 1 --max-rounds 3 --shard-id ${{ matrix.shard }} --num-shards 8 --no-excel
-          else
-            python "$TARGET_SCRIPT" --market tpex --workers 1 --max-rounds 3 --shard-id ${{ matrix.shard }} --num-shards 8 --no-excel
-          fi
+          ATTEMPTS="${TPEX_SHARD_ATTEMPTS:-2}"
+          COOLDOWN="${TPEX_SHARD_RETRY_COOLDOWN_SECONDS:-300}"
+          set +e
+          for attempt in $(seq 1 "$ATTEMPTS"); do
+            echo "[*] TPEX shard ${{ matrix.shard }} attempt ${attempt}/${ATTEMPTS}"
+            if [ -n "$TARGET_DATE" ]; then
+              python "$TARGET_SCRIPT" --market tpex --date "$TARGET_DATE" --workers 1 --max-rounds 3 --shard-id ${{ matrix.shard }} --num-shards 8 --no-excel
+            else
+              python "$TARGET_SCRIPT" --market tpex --workers 1 --max-rounds 3 --shard-id ${{ matrix.shard }} --num-shards 8 --no-excel
+            fi
+            rc=$?
+            if [ "$rc" -eq 0 ]; then
+              echo "[✓] TPEX shard ${{ matrix.shard }} attempt ${attempt}/${ATTEMPTS} passed."
+              exit 0
+            fi
+
+            echo "[!] TPEX shard ${{ matrix.shard }} attempt ${attempt}/${ATTEMPTS} failed with exit code ${rc}."
+            if [ "$attempt" -lt "$ATTEMPTS" ]; then
+              echo "[*] Cooling down ${COOLDOWN}s and rotating WARP/Chromium before retrying shard ${{ matrix.shard }}..."
+              rm -rf output/*_tpex_shard_${{ matrix.shard }}.parquet output/logs/crawler_tpex_shard_${{ matrix.shard }}.log logs/crawler_tpex_shard_${{ matrix.shard }}.log downloads_tpex_cloud || true
+              pkill -9 -f 'chrome|chromium' 2>/dev/null || true
+              warp-cli --accept-tos disconnect 2>/dev/null || true
+              sleep 8
+              warp-cli --accept-tos connect 2>/dev/null || true
+              sleep "$COOLDOWN"
+            fi
+          done
+
+          echo "[!] TPEX shard ${{ matrix.shard }} failed after ${ATTEMPTS} attempts."
+          exit 1
 
       - name: 上傳 TPEX 分片產物 (Parquet 與 Log)
         if: always()
