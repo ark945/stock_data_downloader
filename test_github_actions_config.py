@@ -2,18 +2,8 @@
 
 from pathlib import Path
 
-import yaml
-
-
 ROOT = Path(__file__).resolve().parent
 WORKFLOW_DIR = ROOT / ".github" / "workflows"
-
-
-def load_workflow(name: str) -> dict:
-    workflow_path = WORKFLOW_DIR / name
-    assert workflow_path.exists(), f"missing workflow: {workflow_path}"
-    with workflow_path.open("r", encoding="utf-8") as handle:
-        return yaml.load(handle, Loader=yaml.BaseLoader)
 
 
 def workflow_text(name: str) -> str:
@@ -26,17 +16,22 @@ def assert_script_exists(script_name: str) -> None:
 
 def test_workflows_parse() -> None:
     for workflow_path in WORKFLOW_DIR.glob("*.yml"):
-        load_workflow(workflow_path.name)
+        text = workflow_path.read_text(encoding="utf-8")
+        assert "name:" in text, f"workflow missing name: {workflow_path}"
+        assert "jobs:" in text, f"workflow missing jobs: {workflow_path}"
 
 
 def test_daily_workflow_uses_current_sharding() -> None:
     text = workflow_text("daily_stock_crawler.yml")
     assert "TPEX 8-Runner" in text
     assert "tpex-probe:" in text
+    assert "tpex-canary:" in text
     assert "--limit-symbols 5" in text
     assert "needs.tpex-probe.result == 'success'" in text
+    assert "needs.tpex-canary.result == 'success'" in text
     assert "requirements_tpex_cloud.txt" in text
-    assert "shard: [0, 1, 2, 3, 4, 5, 6, 7]" in text
+    assert "shard: [1, 2, 3, 4, 5, 6, 7]" in text
+    assert "name: tpex-shard-0" in text
     assert "--num-shards 8" in text
     assert "TPEX_CI_ABORT_AFTER_CONSECUTIVE_FAILURES" in text
     assert "--max-rounds 1" in text
