@@ -133,7 +133,8 @@ def run_full_market_crawler(
     export_excel: bool = True,
     receiver_email: Optional[str] = None,
     shard_id: int = 0,
-    num_shards: int = 1
+    num_shards: int = 1,
+    limit_symbols: Optional[int] = None
 ):
     start_dt = get_taipei_now()
     start_str = start_dt.strftime("%Y-%m-%d %H:%M:%S")
@@ -179,6 +180,8 @@ def run_full_market_crawler(
         twse_symbols = get_active_listed_symbols()
         if num_shards > 1:
             twse_symbols = [s for i, s in enumerate(twse_symbols) if i % num_shards == shard_id]
+        if limit_symbols and limit_symbols > 0:
+            twse_symbols = twse_symbols[:limit_symbols]
         total_target_count += len(twse_symbols)
         log_msg(f"[*] 取得上市標的清單: {len(twse_symbols)} 檔 (分片 {shard_id + 1}/{num_shards})")
         
@@ -209,6 +212,8 @@ def run_full_market_crawler(
         tpex_symbols = TPEXBrokerCrawler.get_all_tpex_symbols()
         if num_shards > 1:
             tpex_symbols = [s for i, s in enumerate(tpex_symbols) if i % num_shards == shard_id]
+        if limit_symbols and limit_symbols > 0:
+            tpex_symbols = tpex_symbols[:limit_symbols]
         total_target_count += len(tpex_symbols)
         
         tpex_crawler = TPEXBrokerCrawler()
@@ -363,6 +368,7 @@ def main():
     parser.add_argument("--email", type=str, default=None, help="指定接收短缺日報的收件 Email")
     parser.add_argument("--shard-id", type=int, default=0, help="分散式分片索引 (0-indexed)")
     parser.add_argument("--num-shards", type=int, default=1, help="分散式總分片數 (預設 1)")
+    parser.add_argument("--limit-symbols", type=int, default=None, help="限制本次執行標的數，供 CI probe 快速驗證使用")
 
     args = parser.parse_args()
 
@@ -401,7 +407,8 @@ def main():
             export_excel=not args.no_excel,
             receiver_email=args.email,
             shard_id=args.shard_id,
-            num_shards=args.num_shards
+            num_shards=args.num_shards,
+            limit_symbols=args.limit_symbols
         )
     finally:
         sys.stdout = orig_stdout

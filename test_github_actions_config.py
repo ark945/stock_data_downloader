@@ -32,6 +32,9 @@ def test_workflows_parse() -> None:
 def test_daily_workflow_uses_current_sharding() -> None:
     text = workflow_text("daily_stock_crawler.yml")
     assert "TPEX 8-Runner" in text
+    assert "tpex-probe:" in text
+    assert "--limit-symbols 5" in text
+    assert "needs.tpex-probe.result == 'success'" in text
     assert "shard: [0, 1, 2, 3, 4, 5, 6, 7]" in text
     assert "--num-shards 8" in text
     assert "TPEX_CI_ABORT_AFTER_CONSECUTIVE_FAILURES" in text
