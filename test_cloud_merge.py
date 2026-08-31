@@ -4,7 +4,7 @@
 =================================================
 驗證項目：
 1. TWSE 6 分片 Log 彙整為 YYYY-MM-DD-twse.log (檢查排序與內容)
-2. TPEX 20 分片 Log 彙整為 YYYY-MM-DD-tpex.log (檢查排序與內容)
+2. TPEX 8 分片 Log 彙整為 YYYY-MM-DD-tpex.log (檢查排序與內容)
 3. TWSE + TPEX Parquet 檔案合併為 api_absr1_YYYY-MM-DD_YYYY-MM-DD.parquet
 4. gdrive_sync 模組之 subfolder 參數與路徑解析
 """
@@ -58,9 +58,9 @@ def test_all():
     assert twse_content.find("Shard #0") < twse_content.find("Shard #5"), "❌ TWSE 分片順序未按數值排序"
     print(f"✅ [Pass] TWSE 6 分片日誌彙整驗證成功 ({os.path.basename(twse_log)})")
 
-    # 2. 測試 TPEX Log 彙整 (20 shards: 0~19)
-    print("\n[Test 2] 測試 TPEX 20 分片日誌彙整...")
-    for i in range(20):
+    # 2. 測試 TPEX Log 彙整 (8 shards: 0~7)
+    print("\n[Test 2] 測試 TPEX 8 分片日誌彙整...")
+    for i in range(8):
         log_f = os.path.join(logs_dir, f"crawler_tpex_shard_{i}.log")
         with open(log_f, "w", encoding="utf-8") as f:
             f.write(f"[2026-08-26 17:30:{i:02d}] TPEX Shard {i} 開始執行\n")
@@ -73,10 +73,10 @@ def test_all():
 
     with open(tpex_log, "r", encoding="utf-8") as f:
         tpex_content = f.read()
-    assert "Shard #0" in tpex_content and "Shard #19" in tpex_content, "❌ TPEX 日誌內容缺少分片標記"
-    # 確認 Shard 2 出現在 Shard 10 之前 (不是字典排序 10 < 2，而是數值排序 2 < 10)
-    assert tpex_content.find("Shard #2】") < tpex_content.find("Shard #10】"), "❌ TPEX 分片順序未按數值排序 (Shard 10 誤排在 Shard 2 之前)"
-    print(f"✅ [Pass] TPEX 20 分片日誌彙整驗證成功 ({os.path.basename(tpex_log)})")
+    assert "Shard #0" in tpex_content and "Shard #7" in tpex_content, "❌ TPEX 日誌內容缺少分片標記"
+    assert "Shard #8" not in tpex_content, "❌ TPEX 日誌混入非本次 8-shard 測試輸出"
+    assert tpex_content.find("Shard #2】") < tpex_content.find("Shard #7】"), "❌ TPEX 分片順序未按數值排序"
+    print(f"✅ [Pass] TPEX 8 分片日誌彙整驗證成功 ({os.path.basename(tpex_log)})")
 
     # 3. 測試 TWSE + TPEX Parquet 合併為 api_absr1_YYYY-MM-DD_YYYY-MM-DD.parquet
     print("\n[Test 3] 測試全市場 Parquet 二次聚合...")

@@ -3,7 +3,7 @@ name: 通知推播連線測試 (Telegram & Email)
 on:
   schedule:
     # 每天早上 台灣時間 06:30 (UTC 22:30 前一天)
-    - cron: '30 22 * * *'
+    - cron: "30 22 * * *"
   workflow_dispatch: # 支援在 GitHub 網頁手動一鍵觸發測試
 
 jobs:
@@ -18,8 +18,8 @@ jobs:
       - name: 設定 Python 環境
         uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
-          cache: 'pip'
+          python-version: "3.12"
+          cache: "pip"
 
       - name: 安裝基礎依賴 (Requests)
         run: |
@@ -31,8 +31,8 @@ jobs:
           PYTHONIOENCODING: "utf-8"
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
-          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_SERVER: "smtp.gmail.com"
+          SMTP_PORT: "587"
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL }}
@@ -41,4 +41,7 @@ jobs:
             python test_notify.py
           elif [ -f "stock_data_downloader/test_notify.py" ]; then
             python stock_data_downloader/test_notify.py
+          else
+            echo "❌ 找不到 test_notify.py 測試腳本"
+            exit 1
           fi

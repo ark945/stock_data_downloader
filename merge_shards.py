@@ -91,7 +91,7 @@ def send_email_notification(
         return False
 
     market_title = "上市 (TWSE)" if market.lower() == "twse" else ("上櫃 (TPEX)" if market.lower() == "tpex" else "全市場 (上市+上櫃)")
-    node_desc = "6 個獨立 IP 並行" if market.lower() == "twse" else ("20 個獨立 IP 並行" if market.lower() == "tpex" else "26 個獨立矩陣節點並行")
+    node_desc = "6 個獨立 IP 並行" if market.lower() == "twse" else ("8 個獨立 IP 並行" if market.lower() == "tpex" else "14 個獨立矩陣節點並行")
 
     # 構建分市場細部數據表格 (TWSE vs TPEX)
     market_breakdown_html = ""
@@ -230,7 +230,6 @@ def merge_log_shards(market: str = "twse", trade_date: str = "", output_dir: str
         os.path.join(output_dir, f"crawler_{market_lower}_shard_*.log"),
         os.path.join("logs", f"crawler_{market_lower}_shard_*.log"),
         os.path.join("download_shards", "**", f"crawler_{market_lower}_shard_*.log"),
-        os.path.join(".", "**", f"crawler_{market_lower}_shard_*.log"),
     ]
 
     found_logs = set()
@@ -427,7 +426,7 @@ def merge_parquet_shards(output_dir: str = "output", trade_date: str = "", marke
     tg_chat = os.environ.get("TELEGRAM_CHAT_ID")
     if tg_bot and tg_chat:
         gdrive_str = f"☁️ *Google Drive*：[點此立即檢視/下載]({gdrive_link})\n" if gdrive_link else ""
-        node_str = "6 個獨立 IP 節點平行極速完成！" if market == "twse" else ("20 個獨立 IP 節點平行極速完成！" if market == "tpex" else "TWSE + TPEX 全市場 26 節點矩陣聚合完成！")
+        node_str = "6 個獨立 IP 節點平行極速完成！" if market == "twse" else ("8 個獨立 IP 節點平行極速完成！" if market == "tpex" else "TWSE + TPEX 全市場 14 節點矩陣聚合完成！")
         tg_msg = (
             f"🚀 *【台股{market_title}分點日報表】雲端矩陣極速採集完成！*\n\n"
             f"📅 *交易日期*：`{trade_date}`\n"
