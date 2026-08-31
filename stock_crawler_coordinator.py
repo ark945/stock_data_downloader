@@ -16,7 +16,6 @@ from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Optional
 import pandas as pd
 
-from twse_bsr_crawler import TWSEBrokerCrawler, get_active_listed_symbols
 from tpex_bsr_crawler import TPEXBrokerCrawler
 from notify_engine import send_crawler_report_email
 
@@ -176,6 +175,8 @@ def run_full_market_crawler(
 
     # 1. 抓取上市 (TWSE)
     if markets in ["all", "twse"]:
+        from twse_bsr_crawler import TWSEBrokerCrawler, get_active_listed_symbols
+
         log_msg(f">>> [階段 1/2] 啟動 TWSE 上市股票分點抓取 ({actual_twse_w} Workers, 最多 6 輪安全補抓)...")
         twse_symbols = get_active_listed_symbols()
         if num_shards > 1:

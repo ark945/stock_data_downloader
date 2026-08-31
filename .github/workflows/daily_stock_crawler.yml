@@ -178,7 +178,11 @@ jobs:
       - name: 安裝 Python 套件依賴
         run: |
           python -m pip install --upgrade pip
-          if [ -f "requirements.txt" ]; then
+          if [ -f "requirements_tpex_cloud.txt" ]; then
+            pip install -r requirements_tpex_cloud.txt
+          elif [ -f "stock_data_downloader/requirements_tpex_cloud.txt" ]; then
+            pip install -r stock_data_downloader/requirements_tpex_cloud.txt
+          elif [ -f "requirements.txt" ]; then
             pip install -r requirements.txt
           else
             pip install -r stock_data_downloader/requirements.txt
@@ -261,7 +265,11 @@ jobs:
       - name: 安裝 Python 套件依賴
         run: |
           python -m pip install --upgrade pip
-          if [ -f "requirements.txt" ]; then
+          if [ -f "requirements_tpex_cloud.txt" ]; then
+            pip install -r requirements_tpex_cloud.txt
+          elif [ -f "stock_data_downloader/requirements_tpex_cloud.txt" ]; then
+            pip install -r stock_data_downloader/requirements_tpex_cloud.txt
+          elif [ -f "requirements.txt" ]; then
             pip install -r requirements.txt
           else
             pip install -r stock_data_downloader/requirements.txt
