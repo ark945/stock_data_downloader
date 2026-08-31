@@ -329,7 +329,7 @@ class TPEXCloudCrawler:
     PER_STOCK_TIMEOUT = 35      # 單檔等待 API JSON 回應封包上限 (秒)
     MIN_INTER_STOCK_DELAY = 2.0 # 檔間平穩微延遲下限 (秒)
     MAX_INTER_STOCK_DELAY = 3.5 # 檔間平穩微延遲上限 (秒)
-    PAGE_READY_WAIT = 25        # 首頁 / 重載後等待 Token 簽發上限 (秒)
+    PAGE_READY_WAIT = 45        # 首頁 / 重載後等待 Token 簽發上限 (秒)
 
     def _click_query(self, page) -> None:
         """精準點擊日報表「查詢」按鈕 (文字判定 + CSS Selector 雙重保險)"""
@@ -366,12 +366,27 @@ class TPEXCloudCrawler:
         co.set_argument("--disable-dev-shm-usage")
         co.set_argument("--window-size=1920,1080")
 
-        page = ChromiumPage(addr_or_opts=co)
-        page.listen.start(["afterTrading", "brokerBS"])
-        page.get(self.TPEX_URL, retry=3, timeout=30)
-        initial_token = self._wait_token(page, timeout=self.PAGE_READY_WAIT)
-        print(f"[*] TPEX 首頁 Session 預熱完成，初始 Token 長度: {len(initial_token)}")
-        return page, None
+        last_error = ""
+        for launch_attempt in range(1, 4):
+            page = ChromiumPage(addr_or_opts=co)
+            page.listen.start(["afterTrading", "brokerBS"])
+            page.get(self.TPEX_URL, retry=3, timeout=30)
+            initial_token = self._wait_token(page, timeout=self.PAGE_READY_WAIT)
+            print(f"[*] TPEX 首頁 Session 預熱完成，初始 Token 長度: {len(initial_token)} (啟動嘗試 {launch_attempt}/3)")
+            if initial_token:
+                return page, None
+
+            last_error = "首頁 Turnstile 初始 Token 未取得"
+            try:
+                page.quit()
+            except Exception:
+                pass
+            if sys.platform.startswith("linux"):
+                os.system("pkill -9 -f 'chrome|chromium' 2>/dev/null || true")
+                os.system("warp-cli --accept-tos disconnect 2>/dev/null; sleep 2; warp-cli --accept-tos connect 2>/dev/null; sleep 8 || true")
+            time.sleep(5.0)
+
+        raise RuntimeError(f"TPEX 雲端瀏覽器 Session 預熱失敗：{last_error}")
 
     def crawl_stocks(
         self,
