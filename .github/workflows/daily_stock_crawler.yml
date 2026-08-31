@@ -252,7 +252,7 @@ jobs:
     needs: [pre-check, tpex-probe]
     if: ${{ needs.pre-check.outputs.should_skip != 'true' && needs.tpex-probe.result == 'success' && (github.event_name == 'schedule' || github.event.inputs.market == 'all' || github.event.inputs.market == 'tpex' || github.event.inputs.market == '') }}
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 60
 
     steps:
       - name: 檢出專案代碼 (Checkout)
@@ -301,7 +301,7 @@ jobs:
           DISPLAY: ":99"
           PYTHONIOENCODING: "utf-8"
           PYTHONUNBUFFERED: "1"
-          TPEX_CI_ABORT_AFTER_CONSECUTIVE_FAILURES: "3"
+          TPEX_CI_ABORT_AFTER_CONSECUTIVE_FAILURES: "0"
           TARGET_DATE: ${{ github.event.inputs.target_date || needs.pre-check.outputs.target_date }}
         run: |
           if [ -f "stock_crawler_coordinator.py" ]; then
@@ -311,9 +311,9 @@ jobs:
           fi
 
           if [ -n "$TARGET_DATE" ]; then
-            python "$TARGET_SCRIPT" --market tpex --date "$TARGET_DATE" --workers 1 --max-rounds 1 --shard-id 0 --num-shards 8 --no-excel
+            python "$TARGET_SCRIPT" --market tpex --date "$TARGET_DATE" --workers 1 --max-rounds 3 --shard-id 0 --num-shards 8 --no-excel
           else
-            python "$TARGET_SCRIPT" --market tpex --workers 1 --max-rounds 1 --shard-id 0 --num-shards 8 --no-excel
+            python "$TARGET_SCRIPT" --market tpex --workers 1 --max-rounds 3 --shard-id 0 --num-shards 8 --no-excel
           fi
 
       - name: 上傳 TPEX 金絲雀分片產物 (Parquet 與 Log)
@@ -335,7 +335,7 @@ jobs:
     needs: [pre-check, tpex-probe, tpex-canary]
     if: ${{ needs.pre-check.outputs.should_skip != 'true' && needs.tpex-probe.result == 'success' && needs.tpex-canary.result == 'success' && (github.event_name == 'schedule' || github.event.inputs.market == 'all' || github.event.inputs.market == 'tpex' || github.event.inputs.market == '') }}
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       max-parallel: 1
@@ -390,7 +390,7 @@ jobs:
           DISPLAY: ":99"
           PYTHONIOENCODING: "utf-8"
           PYTHONUNBUFFERED: "1"
-          TPEX_CI_ABORT_AFTER_CONSECUTIVE_FAILURES: "3"
+          TPEX_CI_ABORT_AFTER_CONSECUTIVE_FAILURES: "0"
           TARGET_DATE: ${{ github.event.inputs.target_date || needs.pre-check.outputs.target_date }}
         run: |
           if [ -f "stock_crawler_coordinator.py" ]; then
@@ -403,9 +403,9 @@ jobs:
           sleep $(( ${{ matrix.shard }} * 15 ))
 
           if [ -n "$TARGET_DATE" ]; then
-            python "$TARGET_SCRIPT" --market tpex --date "$TARGET_DATE" --workers 1 --max-rounds 1 --shard-id ${{ matrix.shard }} --num-shards 8 --no-excel
+            python "$TARGET_SCRIPT" --market tpex --date "$TARGET_DATE" --workers 1 --max-rounds 3 --shard-id ${{ matrix.shard }} --num-shards 8 --no-excel
           else
-            python "$TARGET_SCRIPT" --market tpex --workers 1 --max-rounds 1 --shard-id ${{ matrix.shard }} --num-shards 8 --no-excel
+            python "$TARGET_SCRIPT" --market tpex --workers 1 --max-rounds 3 --shard-id ${{ matrix.shard }} --num-shards 8 --no-excel
           fi
 
       - name: 上傳 TPEX 分片產物 (Parquet 與 Log)
@@ -506,7 +506,7 @@ jobs:
   merge-tpex:
     name: 聚合 TPEX 上櫃資料庫與 Log 歸檔
     needs: [pre-check, tpex-canary, tpex-shards]
-    if: ${{ always() && needs.pre-check.outputs.should_skip != 'true' && needs.tpex-canary.result == 'success' && needs.tpex-shards.result != 'skipped' }}
+    if: ${{ always() && needs.pre-check.outputs.should_skip != 'true' && needs.tpex-canary.result == 'success' && needs.tpex-shards.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -589,7 +589,7 @@ jobs:
   merge-all:
     name: 整合 TWSE + TPEX 全市場資料庫並推播
     needs: [pre-check, merge-twse, merge-tpex]
-    if: ${{ always() && needs.pre-check.outputs.should_skip != 'true' && (github.event_name == 'schedule' || github.event.inputs.market == 'all' || github.event.inputs.market == '') && (needs.merge-twse.result != 'skipped' || needs.merge-tpex.result != 'skipped') }}
+    if: ${{ always() && needs.pre-check.outputs.should_skip != 'true' && (github.event_name == 'schedule' || github.event.inputs.market == 'all' || github.event.inputs.market == '') && (needs.merge-twse.result == 'success' || needs.merge-tpex.result == 'success') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
 

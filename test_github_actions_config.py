@@ -38,6 +38,8 @@ def test_daily_workflow_uses_current_sharding() -> None:
     assert "--num-shards 8" in text
     assert "TPEX_CI_ABORT_AFTER_CONSECUTIVE_FAILURES" in text
     assert "--max-rounds 1" in text
+    assert "--max-rounds 3" in text
+    assert "needs.tpex-shards.result == 'success'" in text
     assert "TPEX 20-Runner" not in text
     assert "--num-shards 20" not in text
 
