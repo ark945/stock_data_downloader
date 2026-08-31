@@ -430,10 +430,13 @@ class TPEXCloudCrawler:
                 success_crawl = False
                 last_failure_reason = "未取得有效回應"
                 try:
-                    # 每 80 檔主動優雅重啟一次 Chrome (清空 DevTools 記憶體與 Session 堆積，徹底根治長時間運行崩潰)
-                    if idx > 1 and (idx - 1) % 80 == 0:
+                    # 每 75 檔主動冷卻並重啟 Chrome/WARP，避開長會話在 80 檔附近被 TPEX 保護性節流
+                    if idx > 1 and (idx - 1) % 75 == 0:
+                        print(f"[*] [預防性重啟] 已連續完成 {idx - 1} 檔，冷卻並重建 WARP/Chromium 會話...")
                         _cleanup_browser(page, temp_user_data)
-                        time.sleep(1.5)
+                        if sys.platform.startswith("linux"):
+                            os.system("warp-cli --accept-tos disconnect 2>/dev/null; sleep 5; warp-cli --accept-tos connect 2>/dev/null; sleep 12 || true")
+                        time.sleep(10.0)
                         page, temp_user_data = self._launch_browser_session()
 
                     # 智慧自癒：若連續失敗達 3 次，輪換 WARP 出口 IP 並徹底重構全新瀏覽器會話
