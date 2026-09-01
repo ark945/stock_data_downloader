@@ -133,7 +133,8 @@ def run_full_market_crawler(
     export_excel: bool = True,
     receiver_email: Optional[str] = None,
     shard_id: int = 0,
-    num_shards: int = 1
+    num_shards: int = 1,
+    with_close_price: bool = False
 ):
     start_dt = get_taipei_now()
     start_str = start_dt.strftime("%Y-%m-%d %H:%M:%S")
@@ -272,6 +273,21 @@ def run_full_market_crawler(
         x_size_mb = os.path.getsize(excel_path) / (1024 * 1024)
         log_msg(f"[✓] Excel 檔案已儲存: {excel_path} ({x_size_mb:.2f} MB)")
 
+    # 4. (可選) 同步抓取當日 TWSE/TPEX 收盤價，與分點資料共同輸出並上傳至同一雲端目錄
+    # 僅於單機（非雲端分片）模式執行，避免多個分片節點重複請求/覆蓋同一收盤價檔案
+    if with_close_price and num_shards <= 1:
+        try:
+            from close_price_crawler import run_close_price_crawler
+            log_msg(">>> [收盤價擴充] 同步抓取當日 TWSE/TPEX 收盤價 (api_close1_*.parquet)...")
+            run_close_price_crawler(
+                trade_date=trade_date,
+                markets=markets,
+                output_dir=output_dir,
+                upload_gdrive=True
+            )
+        except Exception as e:
+            log_msg(f"[!] 收盤價擴充抓取失敗（不影響分點主流程）: {e}")
+
     end_dt = get_taipei_now()
     end_str = end_dt.strftime("%Y-%m-%d %H:%M:%S")
     elapsed_total = (end_dt - start_dt).total_seconds()
@@ -363,6 +379,7 @@ def main():
     parser.add_argument("--email", type=str, default=None, help="指定接收短缺日報的收件 Email")
     parser.add_argument("--shard-id", type=int, default=0, help="分散式分片索引 (0-indexed)")
     parser.add_argument("--num-shards", type=int, default=1, help="分散式總分片數 (預設 1)")
+    parser.add_argument("--with-close-price", action="store_true", help="同步抓取當日 TWSE/TPEX 收盤價 (api_close1_*.parquet)，僅單機模式支援")
 
     args = parser.parse_args()
 
@@ -401,7 +418,8 @@ def main():
             export_excel=not args.no_excel,
             receiver_email=args.email,
             shard_id=args.shard_id,
-            num_shards=args.num_shards
+            num_shards=args.num_shards,
+            with_close_price=args.with_close_price
         )
     finally:
         sys.stdout = orig_stdout

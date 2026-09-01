@@ -1,0 +1,112 @@
+name: 測試每日收盤價爬蟲 (TWSE + TPEX)
+
+# 僅測試 close_price_crawler.py 的收盤價採集功能，不觸發任何分點爬蟲流程
+on:
+  workflow_dispatch:
+    inputs:
+      target_date:
+        description: "指定測試日期 (YYYY-MM-DD，留空則自動判斷最新交易日)"
+        required: false
+        default: ""
+      market:
+        description: "測試市場 (all / twse / tpex)"
+        required: true
+        default: "all"
+      upload_gdrive:
+        description: "是否同步上傳至 Google Drive (預設否，僅本地驗證)"
+        required: true
+        default: "false"
+
+jobs:
+  test-close-price:
+    name: 收盤價爬蟲功能測試
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: 檢出專案代碼 (Checkout)
+        uses: actions/checkout@v4
+
+      - name: 設定 Python 環境
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: 安裝 Python 套件依賴 (僅需 requests / pandas / pyarrow)
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests pandas pyarrow google-api-python-client google-auth
+
+      - name: 執行收盤價爬蟲
+        id: run_crawler
+        env:
+          PYTHONIOENCODING: "utf-8"
+          GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
+          GDRIVE_UPLOAD_URL: ${{ secrets.GDRIVE_UPLOAD_URL }}
+          GDRIVE_SERVICE_ACCOUNT_KEY: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_KEY }}
+          TARGET_DATE: ${{ github.event.inputs.target_date }}
+          TARGET_MARKET: ${{ github.event.inputs.market }}
+          UPLOAD_GDRIVE: ${{ github.event.inputs.upload_gdrive }}
+        run: |
+          EXTRA_ARGS=""
+          if [ "$UPLOAD_GDRIVE" != "true" ]; then
+            EXTRA_ARGS="--no-gdrive"
+          fi
+
+          if [ -n "$TARGET_DATE" ]; then
+            python close_price_crawler.py --date "$TARGET_DATE" --market "$TARGET_MARKET" $EXTRA_ARGS
+          else
+            python close_price_crawler.py --market "$TARGET_MARKET" $EXTRA_ARGS
+          fi
+
+      - name: 驗證產出檔案與資料筆數
+        run: |
+          python - <<'EOF'
+          import glob
+          import sys
+          import pandas as pd
+
+          files = glob.glob("output/api_close1_*.parquet")
+          if not files:
+              print("[!] 找不到任何 api_close1_*.parquet 產出檔案！")
+              sys.exit(1)
+
+          target = max(files, key=lambda f: f)
+          df = pd.read_parquet(target)
+          print(f"[*] 驗證檔案: {target}")
+          print(f"[*] 總筆數: {len(df):,}")
+          print(f"[*] 涵蓋市場: {sorted(df['market'].unique().tolist())}")
+          print(df.head(10).to_string())
+
+          if len(df) == 0:
+              print("[!] 收盤價資料筆數為 0，測試失敗！")
+              sys.exit(1)
+
+          required_cols = [
+              "symbol", "name", "trade_date", "market", "open", "high", "low",
+              "close", "change", "volume", "transaction_count", "turnover",
+              "last_bid_price", "last_ask_price",
+          ]
+          missing = [c for c in required_cols if c not in df.columns]
+          if missing:
+              print(f"[!] 缺少必要欄位: {missing}")
+              sys.exit(1)
+
+          null_close_ratio = df["close"].isna().mean()
+          print(f"[*] 收盤價缺值比例: {null_close_ratio:.2%}")
+          if null_close_ratio > 0.5:
+              print("[!] 收盤價缺值比例過高，判定資料異常！")
+              sys.exit(1)
+
+          print("[✓] 收盤價爬蟲功能測試通過！")
+          EOF
+
+      - name: 上傳測試產物 (Parquet) 供人工檢視
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-close-price-parquet
+          path: |
+            output/api_close1_*.parquet
+          retention-days: 3

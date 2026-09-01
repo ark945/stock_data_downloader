@@ -1,0 +1,308 @@
+"""
+台股每日收盤價爬蟲 (TWSE 上市 + TPEX 上櫃)
+--------------------------------------------
+獨立輕量級模組：僅依賴 requests + pandas，無需瀏覽器自動化 / CAPTCHA 辨識，
+單次 JSON API 請求即可取得「當日全市場」收盤行情，未來可依 (symbol, trade_date)
+與券商分點買賣日報表 (api_absr1_*.parquet) 進行 Join 分析。
+
+資料來源：
+- TWSE 上市：https://www.twse.com.tw/rwd/zh/afterTrading/MI_INDEX
+  (支援 date=YYYYMMDD 查詢任意歷史交易日之「每日收盤行情」表)
+- TPEX 上櫃：https://www.tpex.org.tw/web/stock/aftertrading/otc_quotes_no1430/stk_wn1430_result.php
+  (支援 d=民國年/MM/DD 查詢任意歷史交易日；備援採用僅提供當日資料的 OpenAPI
+  https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes)
+
+標準 14 欄位輸出 (api_close1_*.parquet)：
+    symbol, name, trade_date, market, open, high, low, close, change,
+    volume, transaction_count, turnover, last_bid_price, last_ask_price
+
+產檔規格 (與分點 api_absr1_* 對齊，雲端存放於同一 Google Drive 根目錄)：
+    api_close1_{YYYY-MM-DD}_{YYYY-MM-DD}.parquet        (全市場)
+    api_close1_{YYYY-MM-DD}_{YYYY-MM-DD}_twse.parquet   (僅上市)
+    api_close1_{YYYY-MM-DD}_{YYYY-MM-DD}_tpex.parquet   (僅上櫃)
+"""
+
+import os
+import re
+import sys
+import argparse
+from datetime import datetime, timezone, timedelta
+from typing import Optional
+import requests
+import pandas as pd
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
+except ImportError:
+    pass
+
+TAIPEI_TZ = timezone(timedelta(hours=8))
+
+CLOSE_PRICE_COLUMNS = [
+    "symbol", "name", "trade_date", "market",
+    "open", "high", "low", "close", "change",
+    "volume", "transaction_count", "turnover",
+    "last_bid_price", "last_ask_price",
+]
+
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+}
+
+
+def get_taipei_now() -> datetime:
+    """取得台灣時間 (UTC+8)"""
+    return datetime.now(timezone.utc).astimezone(TAIPEI_TZ)
+
+
+def get_latest_trading_date() -> str:
+    """精確計算台股最新交易日 (規則與 stock_crawler_coordinator.py 一致)"""
+    now = get_taipei_now()
+    w = now.weekday()
+    if w == 5:
+        delta = 1
+    elif w == 6:
+        delta = 2
+    elif w == 0:
+        delta = 0 if now.hour >= 17 else 3
+    else:
+        delta = 0 if now.hour >= 17 else 1
+    return (now - pd.Timedelta(days=delta)).strftime("%Y-%m-%d")
+
+
+def log_msg(msg: str):
+    """輸出帶有精準台灣時間時戳的日誌"""
+    ts = get_taipei_now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[{ts}] {msg}")
+    sys.stdout.flush()
+
+
+def _to_float(value) -> Optional[float]:
+    """將原始字串轉為 float，無法解析 (--、空白) 則回傳 None"""
+    if value is None:
+        return None
+    text = str(value).replace(",", "").strip()
+    if text in ("", "--", "---", "X"):
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
+def fetch_twse_close_price(trade_date: str) -> pd.DataFrame:
+    """
+    抓取 TWSE 上市當日（或指定歷史日）全市場收盤行情 (單次 JSON API 請求)
+    :param trade_date: YYYY-MM-DD
+    """
+    date_compact = trade_date.replace("-", "")
+    url = "https://www.twse.com.tw/rwd/zh/afterTrading/MI_INDEX"
+    params = {"response": "json", "date": date_compact, "type": "ALLBUT0999"}
+    r = requests.get(url, params=params, headers=HEADERS, timeout=20)
+    r.raise_for_status()
+    res_json = r.json()
+
+    target_table = None
+    for tbl in res_json.get("tables", []):
+        title = tbl.get("title", "")
+        fields = tbl.get("fields", [])
+        if "每日收盤行情" in title and "證券代號" in fields:
+            target_table = tbl
+            break
+    if not target_table:
+        return pd.DataFrame(columns=CLOSE_PRICE_COLUMNS)
+
+    records = []
+    for row in target_table.get("data", []):
+        if len(row) < 15:
+            continue
+        sign_html = str(row[9])
+        change_diff = _to_float(row[10])
+        change = None
+        if change_diff is not None:
+            if "green" in sign_html:
+                change = -change_diff
+            elif "red" in sign_html:
+                change = change_diff
+            else:
+                change = change_diff  # 持平或無比價時差值通常為 0
+
+        records.append({
+            "symbol": str(row[0]).strip(),
+            "name": str(row[1]).strip(),
+            "trade_date": trade_date,
+            "market": "TWSE",
+            "open": _to_float(row[5]),
+            "high": _to_float(row[6]),
+            "low": _to_float(row[7]),
+            "close": _to_float(row[8]),
+            "change": change,
+            "volume": _to_float(row[2]),
+            "transaction_count": _to_float(row[3]),
+            "turnover": _to_float(row[4]),
+            "last_bid_price": _to_float(row[11]),
+            "last_ask_price": _to_float(row[13]),
+        })
+
+    return pd.DataFrame(records, columns=CLOSE_PRICE_COLUMNS)
+
+
+def _parse_tpex_legacy_table(table: dict, trade_date: str) -> pd.DataFrame:
+    records = []
+    for row in table.get("data", []):
+        if len(row) < 13:
+            continue
+        records.append({
+            "symbol": str(row[0]).strip(),
+            "name": str(row[1]).strip(),
+            "trade_date": trade_date,
+            "market": "TPEX",
+            "open": _to_float(row[4]),
+            "high": _to_float(row[5]),
+            "low": _to_float(row[6]),
+            "close": _to_float(row[2]),
+            "change": _to_float(row[3]),
+            "volume": _to_float(row[7]),
+            "transaction_count": _to_float(row[9]),
+            "turnover": _to_float(row[8]),
+            "last_bid_price": _to_float(row[10]),
+            "last_ask_price": _to_float(row[12]),
+        })
+    return pd.DataFrame(records, columns=CLOSE_PRICE_COLUMNS)
+
+
+def _fetch_tpex_close_price_openapi(trade_date: str) -> pd.DataFrame:
+    """備援：TPEX OpenAPI (僅提供「當日」資料，適用於排程當天執行的情境)"""
+    url = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes"
+    r = requests.get(url, headers=HEADERS, timeout=20)
+    r.raise_for_status()
+    data = r.json()
+
+    records = []
+    for item in data:
+        symbol = str(item.get("SecuritiesCompanyCode", "")).strip()
+        # 篩選 4 碼個股 (如 6488)、特別股 (如 8349A) 或上櫃 ETF (如 00720B)，排除 6 碼權證
+        if not re.match(r"^[0-9]{4}[A-Za-z]?$", symbol) and not re.match(r"^00[0-9]{3}[A-Za-z0-9]?$", symbol):
+            continue
+        records.append({
+            "symbol": symbol,
+            "name": str(item.get("CompanyName", "")).strip(),
+            "trade_date": trade_date,
+            "market": "TPEX",
+            "open": _to_float(item.get("Open")),
+            "high": _to_float(item.get("High")),
+            "low": _to_float(item.get("Low")),
+            "close": _to_float(item.get("Close")),
+            "change": _to_float(item.get("Change")),
+            "volume": _to_float(item.get("TradingShares")),
+            "transaction_count": _to_float(item.get("TransactionNumber")),
+            "turnover": _to_float(item.get("TransactionAmount")),
+            "last_bid_price": _to_float(item.get("LatestBidPrice")),
+            "last_ask_price": _to_float(item.get("LatesAskPrice")),
+        })
+    return pd.DataFrame(records, columns=CLOSE_PRICE_COLUMNS)
+
+
+def fetch_tpex_close_price(trade_date: str) -> pd.DataFrame:
+    """
+    抓取 TPEX 上櫃當日（或指定歷史日）全市場收盤行情 (單次 JSON API 請求)
+    :param trade_date: YYYY-MM-DD
+    """
+    dt = datetime.strptime(trade_date, "%Y-%m-%d")
+    roc_date = f"{dt.year - 1911}/{dt.month:02d}/{dt.day:02d}"
+    url = "https://www.tpex.org.tw/web/stock/aftertrading/otc_quotes_no1430/stk_wn1430_result.php"
+    params = {"d": roc_date, "se": "EW", "o": "json"}
+    try:
+        r = requests.get(url, params=params, headers=HEADERS, timeout=20)
+        r.raise_for_status()
+        res_json = r.json()
+        tables = res_json.get("tables", [])
+        if tables and tables[0].get("data"):
+            return _parse_tpex_legacy_table(tables[0], trade_date)
+    except Exception as e:
+        log_msg(f"[!] TPEX 歷史行情查詢失敗，切換 OpenAPI 備援: {e}")
+
+    return _fetch_tpex_close_price_openapi(trade_date)
+
+
+def run_close_price_crawler(
+    trade_date: Optional[str] = None,
+    markets: str = "all",
+    output_dir: Optional[str] = None,
+    upload_gdrive: bool = True,
+) -> str:
+    """
+    執行收盤價全流程：抓取 -> 聚合 -> 輸出 Parquet -> 同步 Google Drive (與分點資料同一根目錄)
+    :return: 產出的本地 Parquet 檔案路徑
+    """
+    if not trade_date:
+        trade_date = get_latest_trading_date()
+    markets = (markets or "all").lower().strip()
+
+    output_dir = output_dir or os.path.join(os.path.dirname(__file__), "output")
+    os.makedirs(output_dir, exist_ok=True)
+
+    market_suffix = f"_{markets}" if markets in ["twse", "tpex"] else ""
+    filename = f"api_close1_{trade_date}_{trade_date}{market_suffix}.parquet"
+    filepath = os.path.join(output_dir, filename)
+
+    print("==================================================")
+    log_msg("[*] 台股每日收盤價爬蟲啟動")
+    log_msg(f"[*] 交易日期: {trade_date}")
+    log_msg(f"[*] 目標市場範疇: {markets.upper()} (產檔規格: {filename})")
+    print("==================================================")
+
+    dfs = []
+    if markets in ["all", "twse"]:
+        log_msg("[*] 抓取 TWSE 上市收盤行情...")
+        twse_df = fetch_twse_close_price(trade_date)
+        log_msg(f"[✓] TWSE 上市：{len(twse_df):,} 檔")
+        dfs.append(twse_df)
+    if markets in ["all", "tpex"]:
+        log_msg("[*] 抓取 TPEX 上櫃收盤行情...")
+        tpex_df = fetch_tpex_close_price(trade_date)
+        log_msg(f"[✓] TPEX 上櫃：{len(tpex_df):,} 檔")
+        dfs.append(tpex_df)
+
+    full_df = pd.concat(dfs, ignore_index=True) if dfs else pd.DataFrame(columns=CLOSE_PRICE_COLUMNS)
+    full_df.drop_duplicates(subset=["symbol", "trade_date", "market"], inplace=True)
+    full_df.sort_values(by=["market", "symbol"], inplace=True)
+
+    full_df.to_parquet(filepath, compression="zstd", index=False)
+    size_mb = os.path.getsize(filepath) / (1024 * 1024)
+    log_msg(f"[✓] Parquet 已儲存: {filepath} ({size_mb:.2f} MB, 共 {len(full_df):,} 筆)")
+
+    if upload_gdrive:
+        try:
+            from gdrive_sync import upload_file_to_gdrive
+            log_msg("[*] 正在同步上傳至 Google Drive (與分點資料相同根目錄)...")
+            res = upload_file_to_gdrive(filepath)
+            if res:
+                log_msg(f"[✓] 已上傳至 Google Drive (ID: {res.get('file_id')})")
+        except Exception as e:
+            log_msg(f"[!] Google Drive 同步異常: {e}")
+    else:
+        log_msg("[*] 已略過 Google Drive 上傳 (--no-gdrive)")
+
+    return filepath
+
+
+def main():
+    parser = argparse.ArgumentParser(description="台股每日收盤價爬蟲 (TWSE 上市 + TPEX 上櫃)")
+    parser.add_argument("--date", type=str, default=None, help="目標交易日期 (格式 YYYY-MM-DD，留空則自動判斷最新交易日)")
+    parser.add_argument("--market", type=str, choices=["all", "twse", "tpex"], default="all", help="執行市場 (all, twse, tpex)")
+    parser.add_argument("--output-dir", type=str, default=None, help="指定輸出目錄")
+    parser.add_argument("--no-gdrive", action="store_true", help="略過 Google Drive 上傳 (測試用)")
+    args = parser.parse_args()
+
+    run_close_price_crawler(
+        trade_date=args.date,
+        markets=args.market,
+        output_dir=args.output_dir,
+        upload_gdrive=not args.no_gdrive,
+    )
+
+
+if __name__ == "__main__":
+    main()

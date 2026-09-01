@@ -76,6 +76,55 @@ jobs:
           fi
 
   # -----------------------------------------------------------------
+  # 收盤價：單一輕量節點，單次 API 請求即可取得 TWSE+TPEX 全市場收盤行情
+  # (無需瀏覽器自動化或分片，與分點爬蟲並行執行，互不影響)
+  # -----------------------------------------------------------------
+  close-price:
+    name: 每日收盤價採集 (TWSE + TPEX)
+    needs: pre-check
+    if: ${{ needs.pre-check.outputs.should_skip != 'true' && (github.event_name == 'schedule' || github.event.inputs.market == 'all' || github.event.inputs.market == 'twse' || github.event.inputs.market == 'tpex' || github.event.inputs.market == '') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: 檢出專案代碼 (Checkout)
+        uses: actions/checkout@v4
+
+      - name: 設定 Python 環境
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: 安裝 Python 套件依賴 (僅需 requests / pandas / pyarrow)
+        run: |
+          pip install requests pandas pyarrow google-api-python-client google-auth
+
+      - name: 執行收盤價爬蟲 (api_close1_*.parquet)
+        env:
+          PYTHONIOENCODING: "utf-8"
+          GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
+          GDRIVE_UPLOAD_URL: ${{ secrets.GDRIVE_UPLOAD_URL }}
+          GDRIVE_SERVICE_ACCOUNT_KEY: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_KEY }}
+          TARGET_DATE: ${{ github.event.inputs.target_date || needs.pre-check.outputs.target_date }}
+          TARGET_MARKET: ${{ github.event.inputs.market || 'all' }}
+        run: |
+          if [ -n "$TARGET_DATE" ]; then
+            python close_price_crawler.py --date "$TARGET_DATE" --market "$TARGET_MARKET"
+          else
+            python close_price_crawler.py --market "$TARGET_MARKET"
+          fi
+
+      - name: 上傳收盤價產物 (Parquet)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: close-price-parquet
+          path: |
+            output/api_close1_*.parquet
+          retention-days: 7
+
+  # -----------------------------------------------------------------
   # TWSE 上市：6 個獨立 shard；不做瀏覽器不受 CF 影響
   # -----------------------------------------------------------------
   twse-shards:
