@@ -2,6 +2,9 @@ __pycache__/
 *.pyc
 downloads_tpex/
 temp_test/
+download_shards/
+test_merge_workspace/
+output/
 *.tmp
 output/*.parquet
 output/*.xlsx

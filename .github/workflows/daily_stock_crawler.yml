@@ -1,4 +1,4 @@
-name: 每日全市場券商分點爬蟲排程 (TWSE 6-Runner + TPEX 20-Runner + 全市場整合)
+name: 每日全市場券商分點爬蟲排程 (TWSE 6-Runner + TPEX 8-Runner + 全市場整合)
 
 env:
   TZ: "Asia/Taipei"
@@ -186,18 +186,14 @@ jobs:
           retention-days: 1
 
   # -----------------------------------------------------------------
-  # TPEX 上櫃：8 個獨立 shard 矩陣並行；每 shard ~125 檔搭配 15s 錯峰啟動與 3.5s 間隔，完美避開 TPEX 限流
+  # TPEX 前置探針：先用單一 Runner 少量標的驗證 WARP / Turnstile / Session 可用，成功才展開 8-shard 矩陣
   # -----------------------------------------------------------------
-  tpex-shards:
-    name: TPEX-上櫃-分片-${{ matrix.shard }}
+  tpex-probe:
+    name: TPEX-上櫃-雲端探針
     needs: pre-check
     if: ${{ needs.pre-check.outputs.should_skip != 'true' && (github.event_name == 'schedule' || github.event.inputs.market == 'all' || github.event.inputs.market == 'tpex' || github.event.inputs.market == '') }}
     runs-on: ubuntu-latest
-    timeout-minutes: 40
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [0, 1, 2, 3, 4, 5, 6, 7]
+    timeout-minutes: 30
 
     steps:
       - name: 檢出專案代碼 (Checkout)
@@ -213,18 +209,17 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y curl gpg lsb-release xvfb
-          
-          # 安裝並啟動 Cloudflare 官方 WARP 網絡（獲取最高信譽消費者 Egress IP，徹底解鎖 Turnstile）
+
           curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | sudo gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
           echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/cloudflare-client.list
-          
+
           sudo apt-get update
           sudo apt-get install -y cloudflare-warp
-          
+
           warp-cli --accept-tos registration new || warp-cli --accept-tos register
           warp-cli --accept-tos mode warp
           warp-cli --accept-tos connect
-          
+
           sleep 3
           Xvfb :99 -screen 0 1920x1080x24 &
           sleep 1
@@ -232,7 +227,235 @@ jobs:
       - name: 安裝 Python 套件依賴
         run: |
           python -m pip install --upgrade pip
-          if [ -f "requirements.txt" ]; then
+          if [ -f "requirements_tpex_cloud.txt" ]; then
+            pip install -r requirements_tpex_cloud.txt
+          elif [ -f "stock_data_downloader/requirements_tpex_cloud.txt" ]; then
+            pip install -r stock_data_downloader/requirements_tpex_cloud.txt
+          elif [ -f "requirements.txt" ]; then
+            pip install -r requirements.txt
+          else
+            pip install -r stock_data_downloader/requirements.txt
+          fi
+
+      - name: 執行 TPEX 雲端探針 (Shard 0 前 5 檔)
+        env:
+          DISPLAY: ":99"
+          PYTHONIOENCODING: "utf-8"
+          PYTHONUNBUFFERED: "1"
+          TPEX_CI_ABORT_AFTER_CONSECUTIVE_FAILURES: "2"
+          TPEX_PROBE_ATTEMPTS: "3"
+          TPEX_PROBE_RETRY_COOLDOWN_SECONDS: "300"
+          TARGET_DATE: ${{ github.event.inputs.target_date || needs.pre-check.outputs.target_date }}
+        run: |
+          if [ -f "stock_crawler_coordinator.py" ]; then
+            TARGET_SCRIPT="stock_crawler_coordinator.py"
+          else
+            TARGET_SCRIPT="stock_data_downloader/stock_crawler_coordinator.py"
+          fi
+
+          ATTEMPTS="${TPEX_PROBE_ATTEMPTS:-3}"
+          COOLDOWN="${TPEX_PROBE_RETRY_COOLDOWN_SECONDS:-300}"
+          set +e
+          for attempt in $(seq 1 "$ATTEMPTS"); do
+            echo "[*] TPEX probe attempt ${attempt}/${ATTEMPTS}"
+            if [ -n "$TARGET_DATE" ]; then
+              python "$TARGET_SCRIPT" --market tpex --date "$TARGET_DATE" --workers 1 --max-rounds 1 --shard-id 0 --num-shards 8 --limit-symbols 5 --no-excel
+            else
+              python "$TARGET_SCRIPT" --market tpex --workers 1 --max-rounds 1 --shard-id 0 --num-shards 8 --limit-symbols 5 --no-excel
+            fi
+            rc=$?
+            if [ "$rc" -eq 0 ]; then
+              echo "[✓] TPEX probe attempt ${attempt}/${ATTEMPTS} passed."
+              exit 0
+            fi
+
+            echo "[!] TPEX probe attempt ${attempt}/${ATTEMPTS} failed with exit code ${rc}."
+            if [ "$attempt" -lt "$ATTEMPTS" ]; then
+              echo "[*] Cooling down ${COOLDOWN}s and rotating WARP/Chromium before retry..."
+              pkill -9 -f 'chrome|chromium' 2>/dev/null || true
+              warp-cli --accept-tos disconnect 2>/dev/null || true
+              sleep 8
+              warp-cli --accept-tos connect 2>/dev/null || true
+              sleep "$COOLDOWN"
+            fi
+          done
+
+          echo "[!] TPEX probe failed after ${ATTEMPTS} attempts."
+          exit 1
+
+      - name: 上傳 TPEX 探針 Log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tpex-probe-log
+          path: |
+            **/output/logs/crawler_tpex_shard_0.log
+            **/logs/crawler_tpex_shard_0.log
+          retention-days: 1
+
+  # -----------------------------------------------------------------
+  # TPEX 長跑金絲雀：probe 成功後，先完整跑 shard 0 (~125 檔)，成功才展開其餘 7 個 shard
+  # -----------------------------------------------------------------
+  tpex-canary:
+    name: TPEX-上櫃-完整分片金絲雀-0
+    needs: [pre-check, tpex-probe]
+    if: ${{ needs.pre-check.outputs.should_skip != 'true' && needs.tpex-probe.result == 'success' && (github.event_name == 'schedule' || github.event.inputs.market == 'all' || github.event.inputs.market == 'tpex' || github.event.inputs.market == '') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: 檢出專案代碼 (Checkout)
+        uses: actions/checkout@v4
+
+      - name: 設定 Python 環境
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: 安裝系統依賴、Cloudflare WARP 通道與啟動 Xvfb 虛擬桌面
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y curl gpg lsb-release xvfb
+
+          curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | sudo gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/cloudflare-client.list
+
+          sudo apt-get update
+          sudo apt-get install -y cloudflare-warp
+
+          warp-cli --accept-tos registration new || warp-cli --accept-tos register
+          warp-cli --accept-tos mode warp
+          warp-cli --accept-tos connect
+
+          sleep 3
+          Xvfb :99 -screen 0 1920x1080x24 &
+          sleep 1
+
+      - name: 安裝 Python 套件依賴
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f "requirements_tpex_cloud.txt" ]; then
+            pip install -r requirements_tpex_cloud.txt
+          elif [ -f "stock_data_downloader/requirements_tpex_cloud.txt" ]; then
+            pip install -r stock_data_downloader/requirements_tpex_cloud.txt
+          elif [ -f "requirements.txt" ]; then
+            pip install -r requirements.txt
+          else
+            pip install -r stock_data_downloader/requirements.txt
+          fi
+
+      - name: 執行 TPEX 上櫃完整分片金絲雀 (Shard 0/8)
+        env:
+          DISPLAY: ":99"
+          PYTHONIOENCODING: "utf-8"
+          PYTHONUNBUFFERED: "1"
+          TPEX_CI_ABORT_AFTER_CONSECUTIVE_FAILURES: "0"
+          TPEX_SHARD_ATTEMPTS: "2"
+          TPEX_SHARD_RETRY_COOLDOWN_SECONDS: "300"
+          TARGET_DATE: ${{ github.event.inputs.target_date || needs.pre-check.outputs.target_date }}
+        run: |
+          if [ -f "stock_crawler_coordinator.py" ]; then
+            TARGET_SCRIPT="stock_crawler_coordinator.py"
+          else
+            TARGET_SCRIPT="stock_data_downloader/stock_crawler_coordinator.py"
+          fi
+
+          ATTEMPTS="${TPEX_SHARD_ATTEMPTS:-2}"
+          COOLDOWN="${TPEX_SHARD_RETRY_COOLDOWN_SECONDS:-300}"
+          set +e
+          for attempt in $(seq 1 "$ATTEMPTS"); do
+            echo "[*] TPEX canary shard attempt ${attempt}/${ATTEMPTS}"
+            if [ -n "$TARGET_DATE" ]; then
+              python "$TARGET_SCRIPT" --market tpex --date "$TARGET_DATE" --workers 1 --max-rounds 3 --shard-id 0 --num-shards 8 --no-excel
+            else
+              python "$TARGET_SCRIPT" --market tpex --workers 1 --max-rounds 3 --shard-id 0 --num-shards 8 --no-excel
+            fi
+            rc=$?
+            if [ "$rc" -eq 0 ]; then
+              echo "[✓] TPEX canary shard attempt ${attempt}/${ATTEMPTS} passed."
+              exit 0
+            fi
+
+            echo "[!] TPEX canary shard attempt ${attempt}/${ATTEMPTS} failed with exit code ${rc}."
+            if [ "$attempt" -lt "$ATTEMPTS" ]; then
+              echo "[*] Cooling down ${COOLDOWN}s and rotating WARP/Chromium before retrying canary shard..."
+              rm -rf output/*.parquet output/logs/crawler_tpex_shard_0.log logs/crawler_tpex_shard_0.log downloads_tpex_cloud || true
+              pkill -9 -f 'chrome|chromium' 2>/dev/null || true
+              warp-cli --accept-tos disconnect 2>/dev/null || true
+              sleep 8
+              warp-cli --accept-tos connect 2>/dev/null || true
+              sleep "$COOLDOWN"
+            fi
+          done
+
+          echo "[!] TPEX canary shard failed after ${ATTEMPTS} attempts."
+          exit 1
+
+      - name: 上傳 TPEX 金絲雀分片產物 (Parquet 與 Log)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tpex-shard-0
+          path: |
+            **/output/*_tpex_shard_0.parquet
+            **/output/logs/crawler_tpex_shard_0.log
+            **/logs/crawler_tpex_shard_0.log
+          retention-days: 1
+
+  # -----------------------------------------------------------------
+  # TPEX 上櫃：canary 成功後依序執行剩餘 shard；避免多 Runner 同時觸發 TPEX 後端保護性逾時
+  # -----------------------------------------------------------------
+  tpex-shards:
+    name: TPEX-上櫃-分片-${{ matrix.shard }}
+    needs: [pre-check, tpex-probe, tpex-canary]
+    if: ${{ needs.pre-check.outputs.should_skip != 'true' && needs.tpex-probe.result == 'success' && needs.tpex-canary.result == 'success' && (github.event_name == 'schedule' || github.event.inputs.market == 'all' || github.event.inputs.market == 'tpex' || github.event.inputs.market == '') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7]
+
+    steps:
+      - name: 檢出專案代碼 (Checkout)
+        uses: actions/checkout@v4
+
+      - name: 設定 Python 環境
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: 安裝系統依賴、Cloudflare WARP 通道與啟動 Xvfb 虛擬桌面
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y curl gpg lsb-release xvfb
+
+          # 安裝並啟動 Cloudflare 官方 WARP 網絡（獲取最高信譽消費者 Egress IP，徹底解鎖 Turnstile）
+          curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | sudo gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/cloudflare-client.list
+
+          sudo apt-get update
+          sudo apt-get install -y cloudflare-warp
+
+          warp-cli --accept-tos registration new || warp-cli --accept-tos register
+          warp-cli --accept-tos mode warp
+          warp-cli --accept-tos connect
+
+          sleep 3
+          Xvfb :99 -screen 0 1920x1080x24 &
+          sleep 1
+
+      - name: 安裝 Python 套件依賴
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f "requirements_tpex_cloud.txt" ]; then
+            pip install -r requirements_tpex_cloud.txt
+          elif [ -f "stock_data_downloader/requirements_tpex_cloud.txt" ]; then
+            pip install -r stock_data_downloader/requirements_tpex_cloud.txt
+          elif [ -f "requirements.txt" ]; then
             pip install -r requirements.txt
           else
             pip install -r stock_data_downloader/requirements.txt
@@ -243,6 +466,9 @@ jobs:
           DISPLAY: ":99"
           PYTHONIOENCODING: "utf-8"
           PYTHONUNBUFFERED: "1"
+          TPEX_CI_ABORT_AFTER_CONSECUTIVE_FAILURES: "0"
+          TPEX_SHARD_ATTEMPTS: "2"
+          TPEX_SHARD_RETRY_COOLDOWN_SECONDS: "300"
           TARGET_DATE: ${{ github.event.inputs.target_date || needs.pre-check.outputs.target_date }}
         run: |
           if [ -f "stock_crawler_coordinator.py" ]; then
@@ -254,11 +480,36 @@ jobs:
           # 8 分片錯峰啟動 (每分片錯開 15s) 避免同時撞擊 TPEX 首頁與 Session 握手
           sleep $(( ${{ matrix.shard }} * 15 ))
 
-          if [ -n "$TARGET_DATE" ]; then
-            python "$TARGET_SCRIPT" --market tpex --date "$TARGET_DATE" --workers 1 --max-rounds 3 --shard-id ${{ matrix.shard }} --num-shards 8 --no-excel
-          else
-            python "$TARGET_SCRIPT" --market tpex --workers 1 --max-rounds 3 --shard-id ${{ matrix.shard }} --num-shards 8 --no-excel
-          fi
+          ATTEMPTS="${TPEX_SHARD_ATTEMPTS:-2}"
+          COOLDOWN="${TPEX_SHARD_RETRY_COOLDOWN_SECONDS:-300}"
+          set +e
+          for attempt in $(seq 1 "$ATTEMPTS"); do
+            echo "[*] TPEX shard ${{ matrix.shard }} attempt ${attempt}/${ATTEMPTS}"
+            if [ -n "$TARGET_DATE" ]; then
+              python "$TARGET_SCRIPT" --market tpex --date "$TARGET_DATE" --workers 1 --max-rounds 3 --shard-id ${{ matrix.shard }} --num-shards 8 --no-excel
+            else
+              python "$TARGET_SCRIPT" --market tpex --workers 1 --max-rounds 3 --shard-id ${{ matrix.shard }} --num-shards 8 --no-excel
+            fi
+            rc=$?
+            if [ "$rc" -eq 0 ]; then
+              echo "[✓] TPEX shard ${{ matrix.shard }} attempt ${attempt}/${ATTEMPTS} passed."
+              exit 0
+            fi
+
+            echo "[!] TPEX shard ${{ matrix.shard }} attempt ${attempt}/${ATTEMPTS} failed with exit code ${rc}."
+            if [ "$attempt" -lt "$ATTEMPTS" ]; then
+              echo "[*] Cooling down ${COOLDOWN}s and rotating WARP/Chromium before retrying shard ${{ matrix.shard }}..."
+              rm -rf output/*_tpex_shard_${{ matrix.shard }}.parquet output/logs/crawler_tpex_shard_${{ matrix.shard }}.log logs/crawler_tpex_shard_${{ matrix.shard }}.log downloads_tpex_cloud || true
+              pkill -9 -f 'chrome|chromium' 2>/dev/null || true
+              warp-cli --accept-tos disconnect 2>/dev/null || true
+              sleep 8
+              warp-cli --accept-tos connect 2>/dev/null || true
+              sleep "$COOLDOWN"
+            fi
+          done
+
+          echo "[!] TPEX shard ${{ matrix.shard }} failed after ${ATTEMPTS} attempts."
+          exit 1
 
       - name: 上傳 TPEX 分片產物 (Parquet 與 Log)
         if: always()
@@ -315,11 +566,11 @@ jobs:
           GDRIVE_SERVICE_ACCOUNT_KEY: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_KEY }}
           GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
           GDRIVE_LOG_FOLDER_ID: ${{ secrets.GDRIVE_LOG_FOLDER_ID }}
-          SMTP_SERVER: ${{ secrets.SMTP_SERVER || 'smtp.gmail.com' }}
-          SMTP_PORT: ${{ secrets.SMTP_PORT || '587' }}
-          SENDER_EMAIL: ${{ secrets.SENDER_EMAIL || secrets.SMTP_USER }}
-          SENDER_PASSWORD: ${{ secrets.SENDER_PASSWORD || secrets.SMTP_PASSWORD }}
-          RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL || secrets.NOTIFICATION_EMAIL }}
+          SMTP_SERVER: "smtp.gmail.com"
+          SMTP_PORT: "587"
+          SENDER_EMAIL: ${{ secrets.SMTP_USER }}
+          SENDER_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL }}
           TARGET_DATE: ${{ github.event.inputs.target_date || needs.pre-check.outputs.target_date }}
         run: |
           mkdir -p download_shards output/logs
@@ -357,8 +608,8 @@ jobs:
   # -----------------------------------------------------------------
   merge-tpex:
     name: 聚合 TPEX 上櫃資料庫與 Log 歸檔
-    needs: [pre-check, tpex-shards]
-    if: ${{ always() && needs.pre-check.outputs.should_skip != 'true' && needs.tpex-shards.result != 'skipped' }}
+    needs: [pre-check, tpex-canary, tpex-shards]
+    if: ${{ always() && needs.pre-check.outputs.should_skip != 'true' && needs.tpex-canary.result == 'success' && needs.tpex-shards.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -396,11 +647,11 @@ jobs:
           GDRIVE_SERVICE_ACCOUNT_KEY: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_KEY }}
           GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
           GDRIVE_LOG_FOLDER_ID: ${{ secrets.GDRIVE_LOG_FOLDER_ID }}
-          SMTP_SERVER: ${{ secrets.SMTP_SERVER || 'smtp.gmail.com' }}
-          SMTP_PORT: ${{ secrets.SMTP_PORT || '587' }}
-          SENDER_EMAIL: ${{ secrets.SENDER_EMAIL || secrets.SMTP_USER }}
-          SENDER_PASSWORD: ${{ secrets.SENDER_PASSWORD || secrets.SMTP_PASSWORD }}
-          RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL || secrets.NOTIFICATION_EMAIL }}
+          SMTP_SERVER: "smtp.gmail.com"
+          SMTP_PORT: "587"
+          SENDER_EMAIL: ${{ secrets.SMTP_USER }}
+          SENDER_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL }}
           TARGET_DATE: ${{ github.event.inputs.target_date || needs.pre-check.outputs.target_date }}
         run: |
           mkdir -p download_shards output/logs
@@ -441,7 +692,7 @@ jobs:
   merge-all:
     name: 整合 TWSE + TPEX 全市場資料庫並推播
     needs: [pre-check, merge-twse, merge-tpex]
-    if: ${{ always() && needs.pre-check.outputs.should_skip != 'true' && (github.event_name == 'schedule' || github.event.inputs.market == 'all' || github.event.inputs.market == '') && (needs.merge-twse.result != 'skipped' || needs.merge-tpex.result != 'skipped') }}
+    if: ${{ always() && needs.pre-check.outputs.should_skip != 'true' && (github.event_name == 'schedule' || github.event.inputs.market == 'all' || github.event.inputs.market == '') && (needs.merge-twse.result == 'success' || needs.merge-tpex.result == 'success') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -478,11 +729,11 @@ jobs:
           GDRIVE_UPLOAD_URL: ${{ secrets.GDRIVE_UPLOAD_URL }}
           GDRIVE_SERVICE_ACCOUNT_KEY: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_KEY }}
           GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
-          SMTP_SERVER: ${{ secrets.SMTP_SERVER || 'smtp.gmail.com' }}
-          SMTP_PORT: ${{ secrets.SMTP_PORT || '587' }}
-          SENDER_EMAIL: ${{ secrets.SENDER_EMAIL || secrets.SMTP_USER }}
-          SENDER_PASSWORD: ${{ secrets.SENDER_PASSWORD || secrets.SMTP_PASSWORD }}
-          RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL || secrets.NOTIFICATION_EMAIL }}
+          SMTP_SERVER: "smtp.gmail.com"
+          SMTP_PORT: "587"
+          SENDER_EMAIL: ${{ secrets.SMTP_USER }}
+          SENDER_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL }}
           TARGET_DATE: ${{ github.event.inputs.target_date || needs.pre-check.outputs.target_date }}
         run: |
           mkdir -p download_shards output
@@ -508,7 +759,7 @@ jobs:
       - name: 上傳全市場最終 Parquet 資料包
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.ARTIFACT_NAME || 'api_absr1_full_market_daily_parquet' }}
+          name: full-market-final-parquet
           path: |
             output/api_absr1_*_*.parquet
           retention-days: 7

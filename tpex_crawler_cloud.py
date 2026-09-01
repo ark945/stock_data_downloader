@@ -1,7 +1,7 @@
 """
 TPEX 證券櫃檯買賣中心（上櫃股票）券商買賣日報表爬蟲 — 雲端海外 Runner 專用模組 (Cloud / CI)
 特點：
-1. 專為 GitHub Actions 20 節點海外矩陣分片設計 (每節點約處理 50 檔)
+1. 專為 GitHub Actions 8 節點海外矩陣分片設計 (每節點約處理 125 檔)
 2. 單一純淨持久 Chromium Session，避免海外 IP 反覆重啟撞擊 Cloudflare
 3. 嚴格控管 4 分鐘 Turnstile Token 生命週期與連續失敗安全熔斷
 4. 以實體「下載 CSV」按鈕作為精準判定，杜絕模糊文字誤殺
@@ -285,11 +285,12 @@ class TPEXCloudCrawler:
             print(f"[!] 解析 TPEX CSV 失敗 ({stock_id}): {e}")
             return None
 
-    def _wait_token(self, page, timeout: float = 12.0) -> str:
-        """等待並提取 Cloudflare Turnstile 授權 Token"""
+    def _wait_token(self, page, timeout: float = 30.0, last_used_token: str = "") -> str:
+        """等待並提取全新 Cloudflare Turnstile 授權 Token"""
         start_wait = time.time()
         while time.time() - start_wait < timeout:
             try:
+                page.run_js("if (window.turnstile && window.turnstile.execute) { try { window.turnstile.execute(); } catch(e){} }")
                 t = page.run_js("""
                     let tok = '';
                     const el = document.querySelector('input[name="cf-turnstile-response"]') || 
@@ -303,19 +304,32 @@ class TPEXCloudCrawler:
                     }
                     return tok || '';
                 """)
-                if t and len(t) > 20:
+                if t and len(t) > 50 and t != last_used_token:
                     return t
             except Exception:
                 pass
-            time.sleep(0.3)
+            time.sleep(0.5)
         return ""
 
+    def _clear_turnstile_token(self, page) -> None:
+        """清空已送出的 Turnstile token，避免下一檔重複提交舊 token"""
+        try:
+            page.run_js("""
+                const els = document.querySelectorAll('input[name="cf-turnstile-response"]');
+                els.forEach(el => { el.value = ''; });
+                if (window.turnstile) {
+                    try { window.turnstile.reset(); } catch(e) {}
+                }
+            """)
+        except Exception:
+            pass
+
     # ---------------- 參數配置 ----------------
-    TOKEN_TIMEOUT = 10          # 單檔等待 Turnstile Token 上限 (秒)
-    PER_STOCK_TIMEOUT = 15      # 單檔等待 API JSON 回應封包上限 (秒)
-    MIN_INTER_STOCK_DELAY = 0.5 # 檔間平穩微延遲下限 (秒)
-    MAX_INTER_STOCK_DELAY = 1.0 # 檔間平穩微延遲上限 (秒)
-    PAGE_READY_WAIT = 25        # 首頁 / 重載後等待 Token 簽發上限 (秒)
+    TOKEN_TIMEOUT = 30          # 單檔等待全新 Turnstile Token 上限 (秒)
+    PER_STOCK_TIMEOUT = 35      # 單檔等待 API JSON 回應封包上限 (秒)
+    MIN_INTER_STOCK_DELAY = 2.0 # 檔間平穩微延遲下限 (秒)
+    MAX_INTER_STOCK_DELAY = 3.5 # 檔間平穩微延遲上限 (秒)
+    PAGE_READY_WAIT = 45        # 首頁 / 重載後等待 Token 簽發上限 (秒)
 
     def _click_query(self, page) -> None:
         """精準點擊日報表「查詢」按鈕 (文字判定 + CSS Selector 雙重保險)"""
@@ -352,11 +366,27 @@ class TPEXCloudCrawler:
         co.set_argument("--disable-dev-shm-usage")
         co.set_argument("--window-size=1920,1080")
 
-        page = ChromiumPage(addr_or_opts=co)
-        page.listen.start(["afterTrading", "brokerBS"])
-        page.get(self.TPEX_URL, retry=3, timeout=30)
-        time.sleep(4.0)
-        return page, None
+        last_error = ""
+        for launch_attempt in range(1, 4):
+            page = ChromiumPage(addr_or_opts=co)
+            page.listen.start(["afterTrading", "brokerBS"])
+            page.get(self.TPEX_URL, retry=3, timeout=30)
+            initial_token = self._wait_token(page, timeout=self.PAGE_READY_WAIT)
+            print(f"[*] TPEX 首頁 Session 預熱完成，初始 Token 長度: {len(initial_token)} (啟動嘗試 {launch_attempt}/3)")
+            if initial_token:
+                return page, None
+
+            last_error = "首頁 Turnstile 初始 Token 未取得"
+            try:
+                page.quit()
+            except Exception:
+                pass
+            if sys.platform.startswith("linux"):
+                os.system("pkill -9 -f 'chrome|chromium' 2>/dev/null || true")
+                os.system("warp-cli --accept-tos disconnect 2>/dev/null; sleep 2; warp-cli --accept-tos connect 2>/dev/null; sleep 8 || true")
+            time.sleep(5.0)
+
+        raise RuntimeError(f"TPEX 雲端瀏覽器 Session 預熱失敗：{last_error}")
 
     def crawl_stocks(
         self,
@@ -391,14 +421,22 @@ class TPEXCloudCrawler:
 
             start_t = time.time()
             consecutive_fails = 0
+            last_used_token = ""
+            ci_abort_after_raw = os.environ.get("TPEX_CI_ABORT_AFTER_CONSECUTIVE_FAILURES", "5").strip()
+            ci_abort_after = int(ci_abort_after_raw) if ci_abort_after_raw.isdigit() else 5
+            ci_fast_fail = os.environ.get("GITHUB_ACTIONS") == "true" or os.environ.get("CI") == "true"
 
             for idx, sym in enumerate(stock_codes, 1):
                 success_crawl = False
+                last_failure_reason = "未取得有效回應"
                 try:
-                    # 每 80 檔主動優雅重啟一次 Chrome (清空 DevTools 記憶體與 Session 堆積，徹底根治長時間運行崩潰)
-                    if idx > 1 and (idx - 1) % 80 == 0:
+                    # 每 75 檔主動冷卻並重啟 Chrome/WARP，避開長會話在 80 檔附近被 TPEX 保護性節流
+                    if idx > 1 and (idx - 1) % 75 == 0:
+                        print(f"[*] [預防性重啟] 已連續完成 {idx - 1} 檔，冷卻並重建 WARP/Chromium 會話...")
                         _cleanup_browser(page, temp_user_data)
-                        time.sleep(1.5)
+                        if sys.platform.startswith("linux"):
+                            os.system("warp-cli --accept-tos disconnect 2>/dev/null; sleep 5; warp-cli --accept-tos connect 2>/dev/null; sleep 12 || true")
+                        time.sleep(10.0)
                         page, temp_user_data = self._launch_browser_session()
 
                     # 智慧自癒：若連續失敗達 3 次，輪換 WARP 出口 IP 並徹底重構全新瀏覽器會話
@@ -427,29 +465,12 @@ class TPEXCloudCrawler:
                                 }}
                             """)
 
-                            # 2. 取得 Turnstile Token
-                            token_ready = False
-                            current_tok = ""
-                            for _i in range(35):
-                                if _i == 0 or _i % 6 == 0:
-                                    page.run_js("if (window.turnstile) { try { if (window.turnstile.execute) window.turnstile.execute(); } catch(e){} }")
-                                time.sleep(0.3)
-                                tok = page.run_js("""
-                                    if (typeof window.turnstile !== 'undefined' && window.turnstile.getResponse) {
-                                        const r = window.turnstile.getResponse();
-                                        if (r && r.length > 50) return r;
-                                    }
-                                    const el = document.querySelector('form.formblock input[name="cf-turnstile-response"]') || document.querySelector('input[name="cf-turnstile-response"]');
-                                    return el ? (el.value || '') : '';
-                                """)
-                                if tok and len(tok) > 50:
-                                    token_ready = True
-                                    current_tok = tok
-                                    break
+                            # 2. 取得全新 Turnstile Token；未取得時嚴禁點擊查詢
+                            current_tok = self._wait_token(page, timeout=self.TOKEN_TIMEOUT, last_used_token=last_used_token)
 
-                            if not token_ready:
+                            if not current_tok:
                                 page.get(self.TPEX_URL, retry=2, timeout=25)
-                                time.sleep(3.0)
+                                time.sleep(4.0)
                                 page.run_js(f"""
                                     const inp = document.querySelector('input.code') || document.querySelector('[name=code]');
                                     if (inp) {{
@@ -458,22 +479,10 @@ class TPEXCloudCrawler:
                                         inp.dispatchEvent(new Event('change', {{ bubbles: true }}));
                                     }}
                                 """)
-                                for _ in range(45):
-                                    time.sleep(0.3)
-                                    tok = page.run_js("""
-                                        if (typeof window.turnstile !== 'undefined' && window.turnstile.getResponse) {
-                                            const r = window.turnstile.getResponse();
-                                            if (r && r.length > 50) return r;
-                                        }
-                                        const el = document.querySelector('form.formblock input[name="cf-turnstile-response"]') || document.querySelector('input[name="cf-turnstile-response"]');
-                                        return el ? (el.value || '') : '';
-                                    """)
-                                    if tok and len(tok) > 50:
-                                        token_ready = True
-                                        current_tok = tok
-                                        break
+                                current_tok = self._wait_token(page, timeout=self.PAGE_READY_WAIT, last_used_token=last_used_token)
 
-                            if not token_ready:
+                            if not current_tok:
+                                last_failure_reason = "Turnstile Token 逾時"
                                 if attempt < 3:
                                     time.sleep(1.5)
                                 continue
@@ -494,13 +503,13 @@ class TPEXCloudCrawler:
                                     if (btn) btn.click();
                                 """)
 
-                            pkt = page.listen.wait(timeout=25)
+                            last_used_token = current_tok
+                            self._clear_turnstile_token(page)
+                            pkt = page.listen.wait(timeout=self.PER_STOCK_TIMEOUT)
                             ts_res = get_taipei_now().strftime("%H:%M:%S")
 
-                            # 觸發 Turnstile 背景重簽
-                            page.run_js("if (window.turnstile) try { window.turnstile.reset(); } catch(e){}")
-
                             if not pkt:
+                                last_failure_reason = "API 封包逾時"
                                 if attempt < 3:
                                     time.sleep(1.0)
                                 continue
@@ -535,6 +544,7 @@ class TPEXCloudCrawler:
                                     time.sleep(3.5)
                                     break
                                 elif str(body.get("status")) == "520" or "520" in str(body.get("title", "")):
+                                    last_failure_reason = "Cloudflare 520 回應"
                                     time.sleep(3.0 + attempt * 2.0)
                                     continue
                                 elif "stat" in body and ("查無" in str(body["stat"]) or "無交易" in str(body["stat"]) or "無符合" in str(body["stat"])):
@@ -545,21 +555,17 @@ class TPEXCloudCrawler:
                                     break
                                 else:
                                     stat_msg = body.get("stat") or body.get("message") or str(body)[:60]
+                                    last_failure_reason = f"非預期回應: {stat_msg}"
                                     print(f"[{ts_res}]   [上櫃 {idx}/{total}] [非預期回應: {stat_msg}] {sym} (重試 {attempt}/3)")
-                                    # 若為操作逾時或 Session 失效，徹底重啟瀏覽器重建全新 PHP Session
-                                    if "逾時" in str(stat_msg) or "重新整理" in str(stat_msg):
-                                        _cleanup_browser(page, temp_user_data)
-                                        time.sleep(3.0)
-                                        page, temp_user_data = self._launch_browser_session()
-                                    else:
-                                        page.get(self.TPEX_URL, retry=2, timeout=25)
-                                        time.sleep(3.0)
+                                    self._clear_turnstile_token(page)
+                                    time.sleep(5.0 + attempt * 3.0)
                                     continue
 
                             if attempt < 3:
                                 time.sleep(2.5)
 
                         except Exception as e:
+                            last_failure_reason = f"瀏覽器/流程例外: {type(e).__name__}: {e}"
                             # 發生瀏覽器連線斷開時，自動重啟瀏覽器
                             if "Disconnected" in str(type(e)) or "Connection" in str(type(e)):
                                 _cleanup_browser(page, temp_user_data)
@@ -576,7 +582,12 @@ class TPEXCloudCrawler:
                         consecutive_fails += 1
                         ts_res = get_taipei_now().strftime("%H:%M:%S")
                         failed_symbols.append(sym)
-                        print(f"[{ts_res}]   [上櫃 {idx}/{total}] [採集失敗/已記錄待補抓] {sym} (連敗: {consecutive_fails})")
+                        print(f"[{ts_res}]   [上櫃 {idx}/{total}] [採集失敗/已記錄待補抓] {sym} (連敗: {consecutive_fails}, 原因: {last_failure_reason})")
+                        if ci_fast_fail and ci_abort_after > 0 and consecutive_fails >= ci_abort_after:
+                            raise RuntimeError(
+                                f"TPEX 雲端連續失敗 {consecutive_fails} 檔，判定為系統性阻擋，提前中止。"
+                                f"最後標的: {sym}，最後原因: {last_failure_reason}"
+                            )
 
                 except Exception as single_e:
                     consecutive_fails += 1
@@ -584,9 +595,18 @@ class TPEXCloudCrawler:
                     processed_symbols.add(sym)
                     failed_symbols.append(sym)
                     print(f"[{ts_err}]   [上櫃 {idx}/{total}] [單檔例外] {sym} ({single_e})")
+                    if isinstance(single_e, RuntimeError):
+                        raise
+                    if ci_fast_fail and ci_abort_after > 0 and consecutive_fails >= ci_abort_after:
+                        raise RuntimeError(
+                            f"TPEX 雲端連續例外 {consecutive_fails} 檔，判定為系統性阻擋，提前中止。"
+                            f"最後標的: {sym}，最後例外: {single_e}"
+                        )
 
                 sys.stdout.flush()
 
+        except RuntimeError:
+            raise
         except Exception as e:
             print(f"[!] TPEX 雲端引擎異常: {e}")
         finally:
