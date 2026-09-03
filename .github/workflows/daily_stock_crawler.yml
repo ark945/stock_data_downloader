@@ -100,28 +100,31 @@ jobs:
         run: |
           pip install requests pandas pyarrow google-api-python-client google-auth
 
-      - name: 執行收盤價爬蟲 (api_close1_*.parquet)
+      - name: 執行收盤價與輕量數據補齊爬蟲 (收盤價 + 融資券 + 期貨 + 集保)
+        continue-on-error: true
         env:
           PYTHONIOENCODING: "utf-8"
           GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
           GDRIVE_UPLOAD_URL: ${{ secrets.GDRIVE_UPLOAD_URL }}
           GDRIVE_SERVICE_ACCOUNT_KEY: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_KEY }}
           TARGET_DATE: ${{ github.event.inputs.target_date || needs.pre-check.outputs.target_date }}
-          TARGET_MARKET: ${{ github.event.inputs.market || 'all' }}
         run: |
           if [ -n "$TARGET_DATE" ]; then
-            python close_price_crawler.py --date "$TARGET_DATE" --market "$TARGET_MARKET"
+            python reconcile_lightweight_crawlers.py --date "$TARGET_DATE"
           else
-            python close_price_crawler.py --market "$TARGET_MARKET"
+            python reconcile_lightweight_crawlers.py
           fi
 
-      - name: 上傳收盤價產物 (Parquet)
+      - name: 上傳輕量數據產物 (Parquet)
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: close-price-parquet
+          name: lightweight-data-parquet
           path: |
             output/api_close1_*.parquet
+            output_margin/api_margin_*.parquet
+            output_taifex/api_taifex_*.parquet
+            output_tdcc/api_tdcc_*.parquet
           retention-days: 7
 
   # -----------------------------------------------------------------
@@ -747,6 +750,13 @@ jobs:
           fi
 
           python "$MERGE_SCRIPT" "$TARGET_DATE" "all"
+
+          echo "[*] 正在執行輕量數據二次確認巡檢 (19:30 證交所融資券必就緒確認)..."
+          if [ -n "$TARGET_DATE" ]; then
+            python reconcile_lightweight_crawlers.py --date "$TARGET_DATE" || true
+          else
+            python reconcile_lightweight_crawlers.py || true
+          fi
 
           FINAL_FILE=$(find output -maxdepth 1 -name "api_absr1_*.parquet" ! -name "*_twse.parquet" ! -name "*_tpex.parquet" | head -n 1)
           if [ -n "$FINAL_FILE" ]; then

@@ -25,3 +25,7 @@ gdrive_key.json
 
 # Debug artifacts
 debug_*.csv
+
+output_margin/
+output_taifex/
+output_tdcc/
