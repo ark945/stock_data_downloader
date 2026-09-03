@@ -63,7 +63,7 @@ def reconcile_close_price(trade_date: str, max_retries: int = 3) -> bool:
         try:
             from close_price_crawler import run_close_price_crawler
             success = run_close_price_crawler(
-                target_date=trade_date,
+                trade_date=trade_date,
                 output_dir=out_dir,
                 upload_gdrive=True
             )
