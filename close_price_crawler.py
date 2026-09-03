@@ -25,6 +25,7 @@
 import os
 import re
 import sys
+import time
 import argparse
 from datetime import datetime, timezone, timedelta
 from typing import Optional
@@ -204,7 +205,7 @@ def _fetch_tpex_close_price_openapi(trade_date: str) -> pd.DataFrame:
     return pd.DataFrame(records, columns=CLOSE_PRICE_COLUMNS)
 
 
-def fetch_tpex_close_price(trade_date: str) -> pd.DataFrame:
+def fetch_tpex_close_price(trade_date: str, max_retries: int = 3) -> pd.DataFrame:
     """
     抓取 TPEX 上櫃當日（或指定歷史日）全市場收盤行情 (單次 JSON API 請求)
     :param trade_date: YYYY-MM-DD
@@ -213,17 +214,56 @@ def fetch_tpex_close_price(trade_date: str) -> pd.DataFrame:
     roc_date = f"{dt.year - 1911}/{dt.month:02d}/{dt.day:02d}"
     url = "https://www.tpex.org.tw/web/stock/aftertrading/otc_quotes_no1430/stk_wn1430_result.php"
     params = {"d": roc_date, "se": "EW", "o": "json"}
-    try:
-        r = requests.get(url, params=params, headers=HEADERS, timeout=20)
-        r.raise_for_status()
-        res_json = r.json()
-        tables = res_json.get("tables", [])
-        if tables and tables[0].get("data"):
-            return _parse_tpex_legacy_table(tables[0], trade_date)
-    except Exception as e:
-        log_msg(f"[!] TPEX 歷史行情查詢失敗，切換 OpenAPI 備援: {e}")
 
-    return _fetch_tpex_close_price_openapi(trade_date)
+    last_error = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            r = requests.get(url, params=params, headers=HEADERS, timeout=20)
+            r.raise_for_status()
+            res_json = r.json()
+            tables = res_json.get("tables", [])
+            if not tables:
+                return pd.DataFrame(columns=CLOSE_PRICE_COLUMNS)
+            table = tables[0]
+            # 官方回傳 totalCount=0 (data 為空陣列) 代表當日非交易日 (假日)，屬正常情況，非錯誤
+            if not table.get("data"):
+                return pd.DataFrame(columns=CLOSE_PRICE_COLUMNS)
+            return _parse_tpex_legacy_table(table, trade_date)
+        except Exception as e:
+            last_error = e
+            if attempt < max_retries:
+                time.sleep(2 * attempt)
+
+    log_msg(f"[!] TPEX 歷史行情查詢連續 {max_retries} 次失敗: {last_error}")
+
+    # OpenAPI 備援僅提供「當日」快照，僅在查詢目標為系統自動判斷之最新交易日時才適用，
+    # 避免將當日資料誤標記為歷史日期而污染區間回補結果
+    if trade_date == get_latest_trading_date():
+        log_msg("[*] 切換至 TPEX OpenAPI 當日備援...")
+        return _fetch_tpex_close_price_openapi(trade_date)
+
+    log_msg(f"[!] {trade_date} 非當日查詢，略過 OpenAPI 備援 (避免資料錯誤標記)，判定本日抓取失敗")
+    raise RuntimeError(f"TPEX {trade_date} 歷史行情查詢失敗: {last_error}")
+
+
+def _fetch_combined(trade_date: str, markets: str) -> pd.DataFrame:
+    """抓取單一交易日之 TWSE/TPEX 收盤行情並合併為一份 DataFrame"""
+    dfs = []
+    if markets in ["all", "twse"]:
+        log_msg(f"[*] {trade_date} 抓取 TWSE 上市收盤行情...")
+        twse_df = fetch_twse_close_price(trade_date)
+        log_msg(f"[✓] {trade_date} TWSE 上市：{len(twse_df):,} 檔")
+        dfs.append(twse_df)
+    if markets in ["all", "tpex"]:
+        log_msg(f"[*] {trade_date} 抓取 TPEX 上櫃收盤行情...")
+        tpex_df = fetch_tpex_close_price(trade_date)
+        log_msg(f"[✓] {trade_date} TPEX 上櫃：{len(tpex_df):,} 檔")
+        dfs.append(tpex_df)
+
+    full_df = pd.concat(dfs, ignore_index=True) if dfs else pd.DataFrame(columns=CLOSE_PRICE_COLUMNS)
+    full_df.drop_duplicates(subset=["symbol", "trade_date", "market"], inplace=True)
+    full_df.sort_values(by=["market", "symbol"], inplace=True)
+    return full_df
 
 
 def run_close_price_crawler(
@@ -253,21 +293,7 @@ def run_close_price_crawler(
     log_msg(f"[*] 目標市場範疇: {markets.upper()} (產檔規格: {filename})")
     print("==================================================")
 
-    dfs = []
-    if markets in ["all", "twse"]:
-        log_msg("[*] 抓取 TWSE 上市收盤行情...")
-        twse_df = fetch_twse_close_price(trade_date)
-        log_msg(f"[✓] TWSE 上市：{len(twse_df):,} 檔")
-        dfs.append(twse_df)
-    if markets in ["all", "tpex"]:
-        log_msg("[*] 抓取 TPEX 上櫃收盤行情...")
-        tpex_df = fetch_tpex_close_price(trade_date)
-        log_msg(f"[✓] TPEX 上櫃：{len(tpex_df):,} 檔")
-        dfs.append(tpex_df)
-
-    full_df = pd.concat(dfs, ignore_index=True) if dfs else pd.DataFrame(columns=CLOSE_PRICE_COLUMNS)
-    full_df.drop_duplicates(subset=["symbol", "trade_date", "market"], inplace=True)
-    full_df.sort_values(by=["market", "symbol"], inplace=True)
+    full_df = _fetch_combined(trade_date, markets)
 
     full_df.to_parquet(filepath, compression="zstd", index=False)
     size_mb = os.path.getsize(filepath) / (1024 * 1024)
@@ -288,20 +314,136 @@ def run_close_price_crawler(
     return filepath
 
 
+def run_close_price_range(
+    start_date: str,
+    end_date: str,
+    markets: str = "all",
+    output_dir: Optional[str] = None,
+    upload_gdrive: bool = False,
+    save_daily: bool = True,
+    request_delay_sec: float = 0.5,
+) -> str:
+    """
+    批次回補指定日期區間 (含首尾) 之收盤價：逐日抓取 -> 可選輸出每日 Parquet -> 合併輸出整段區間 Parquet
+    非交易日 (週末/假日) 會自動偵測並略過 (若當日 TWSE 與 TPEX 均無資料則視為非交易日)。
+    :return: 合併後的整段區間 Parquet 檔案路徑
+    """
+    markets = (markets or "all").lower().strip()
+    output_dir = output_dir or os.path.join(os.path.dirname(__file__), "output")
+    os.makedirs(output_dir, exist_ok=True)
+
+    start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+    end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+    if start_dt > end_dt:
+        start_dt, end_dt = end_dt, start_dt
+        start_date, end_date = start_dt.strftime("%Y-%m-%d"), end_dt.strftime("%Y-%m-%d")
+
+    market_suffix = f"_{markets}" if markets in ["twse", "tpex"] else ""
+
+    print("==================================================")
+    log_msg("[*] 台股收盤價區間回補啟動")
+    log_msg(f"[*] 區間範圍: {start_date} ~ {end_date}")
+    log_msg(f"[*] 目標市場範疇: {markets.upper()}")
+    print("==================================================")
+
+    all_dfs = []
+    skipped_dates = []
+    failed_dates = []
+    cur = start_dt
+    while cur <= end_dt:
+        date_str = cur.strftime("%Y-%m-%d")
+        if cur.weekday() >= 5:
+            cur += timedelta(days=1)
+            continue
+
+        try:
+            day_df = _fetch_combined(date_str, markets)
+        except Exception as e:
+            log_msg(f"[!] {date_str} 抓取失敗: {e}")
+            failed_dates.append(date_str)
+            cur += timedelta(days=1)
+            time.sleep(request_delay_sec)
+            continue
+
+        if day_df.empty:
+            log_msg(f"[*] {date_str}：無資料 (可能為假日或非交易日)，略過")
+            skipped_dates.append(date_str)
+            cur += timedelta(days=1)
+            time.sleep(request_delay_sec)
+            continue
+
+        all_dfs.append(day_df)
+        if save_daily:
+            daily_filename = f"api_close1_{date_str}_{date_str}{market_suffix}.parquet"
+            daily_path = os.path.join(output_dir, daily_filename)
+            day_df.to_parquet(daily_path, compression="zstd", index=False)
+            log_msg(f"[✓] {date_str}：共 {len(day_df):,} 檔，已儲存 {daily_path}")
+
+        cur += timedelta(days=1)
+        time.sleep(request_delay_sec)
+
+    if not all_dfs:
+        log_msg("[!] 區間內查無任何交易日資料！")
+        return ""
+
+    combined_df = pd.concat(all_dfs, ignore_index=True)
+    combined_df.drop_duplicates(subset=["symbol", "trade_date", "market"], inplace=True)
+    combined_df.sort_values(by=["trade_date", "market", "symbol"], inplace=True)
+
+    combined_filename = f"api_close1_{start_date}_{end_date}{market_suffix}.parquet"
+    combined_path = os.path.join(output_dir, combined_filename)
+    combined_df.to_parquet(combined_path, compression="zstd", index=False)
+    size_mb = os.path.getsize(combined_path) / (1024 * 1024)
+
+    print("==================================================")
+    log_msg(f"[✓] 區間合併 Parquet 已儲存: {combined_path} ({size_mb:.2f} MB, 共 {len(combined_df):,} 筆)")
+    log_msg(f"[+] 實際交易日數: {len(all_dfs)} 天 | 略過非交易日: {len(skipped_dates)} 天 | 抓取失敗: {len(failed_dates)} 天")
+    if failed_dates:
+        log_msg(f"[!] 失敗日期: {', '.join(failed_dates)}")
+    print("==================================================")
+
+    if upload_gdrive:
+        try:
+            from gdrive_sync import upload_file_to_gdrive
+            log_msg("[*] 正在同步上傳合併檔至 Google Drive (與分點資料相同根目錄)...")
+            res = upload_file_to_gdrive(combined_path)
+            if res:
+                log_msg(f"[✓] 已上傳至 Google Drive (ID: {res.get('file_id')})")
+        except Exception as e:
+            log_msg(f"[!] Google Drive 同步異常: {e}")
+
+    return combined_path
+
+
 def main():
     parser = argparse.ArgumentParser(description="台股每日收盤價爬蟲 (TWSE 上市 + TPEX 上櫃)")
-    parser.add_argument("--date", type=str, default=None, help="目標交易日期 (格式 YYYY-MM-DD，留空則自動判斷最新交易日)")
+    parser.add_argument("--date", type=str, default=None, help="目標交易日期 (單日，格式 YYYY-MM-DD，留空則自動判斷最新交易日)")
+    parser.add_argument("--start-date", type=str, default=None, help="區間回補起始日期 (需搭配 --end-date 使用)")
+    parser.add_argument("--end-date", type=str, default=None, help="區間回補結束日期 (需搭配 --start-date 使用)")
     parser.add_argument("--market", type=str, choices=["all", "twse", "tpex"], default="all", help="執行市場 (all, twse, tpex)")
     parser.add_argument("--output-dir", type=str, default=None, help="指定輸出目錄")
     parser.add_argument("--no-gdrive", action="store_true", help="略過 Google Drive 上傳 (測試用)")
+    parser.add_argument("--no-daily-files", action="store_true", help="區間模式下略過每日單独檔案，僅輸出合併檔")
     args = parser.parse_args()
 
-    run_close_price_crawler(
-        trade_date=args.date,
-        markets=args.market,
-        output_dir=args.output_dir,
-        upload_gdrive=not args.no_gdrive,
-    )
+    if args.start_date or args.end_date:
+        if not (args.start_date and args.end_date):
+            parser.error("--start-date 與 --end-date 必須同時提供")
+        run_close_price_range(
+            start_date=args.start_date,
+            end_date=args.end_date,
+            markets=args.market,
+            output_dir=args.output_dir,
+            upload_gdrive=not args.no_gdrive,
+            save_daily=not args.no_daily_files,
+        )
+    else:
+        run_close_price_crawler(
+            trade_date=args.date,
+            markets=args.market,
+            output_dir=args.output_dir,
+            upload_gdrive=not args.no_gdrive,
+        )
 
 
 if __name__ == "__main__":
