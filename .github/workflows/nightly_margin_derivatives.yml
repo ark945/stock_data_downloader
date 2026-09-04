@@ -17,7 +17,7 @@ on:
         required: false
         default: ""
       send_notification:
-        description: "是否發送 Telegram / LINE 完成通知"
+        description: "是否發送 Telegram 完成通知"
         required: false
         type: boolean
         default: false
@@ -45,7 +45,7 @@ jobs:
         run: |
           pip install requests pandas pyarrow google-api-python-client google-auth
 
-      - name: 執行上市櫃融資融券爬蟲 (TWSE & TPEX Margin)
+      - name: 執行輕量爬蟲對齊與補齊 (融資券 + 期貨 + 收盤價 + 集保)
         env:
           PYTHONIOENCODING: "utf-8"
           GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
@@ -54,38 +54,22 @@ jobs:
           TARGET_DATE: ${{ github.event.inputs.target_date }}
         run: |
           if [ -n "$TARGET_DATE" ]; then
-            python twse_margin_crawler.py --date "$TARGET_DATE" --upload-gdrive
+            python reconcile_lightweight_crawlers.py --date "$TARGET_DATE"
           else
-            python twse_margin_crawler.py --upload-gdrive
+            python reconcile_lightweight_crawlers.py
           fi
 
-      - name: 執行盤後期貨大額多空爬蟲 (TAIFEX Futures)
-        env:
-          PYTHONIOENCODING: "utf-8"
-          GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
-          GDRIVE_UPLOAD_URL: ${{ secrets.GDRIVE_UPLOAD_URL }}
-          GDRIVE_SERVICE_ACCOUNT_KEY: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_KEY }}
-          TARGET_DATE: ${{ github.event.inputs.target_date }}
-        run: |
-          if [ -n "$TARGET_DATE" ]; then
-            python taifex_futures_crawler.py --date "$TARGET_DATE" --upload-gdrive
-          else
-            python taifex_futures_crawler.py --upload-gdrive
-          fi
-
-      - name: 驗證並補齊當日收盤行情與三大法人 (TWSE & TPEX Close)
-        env:
-          PYTHONIOENCODING: "utf-8"
-          GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
-          GDRIVE_UPLOAD_URL: ${{ secrets.GDRIVE_UPLOAD_URL }}
-          GDRIVE_SERVICE_ACCOUNT_KEY: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_KEY }}
-          TARGET_DATE: ${{ github.event.inputs.target_date }}
-        run: |
-          if [ -n "$TARGET_DATE" ]; then
-            python close_price_crawler.py --date "$TARGET_DATE" --upload-gdrive
-          else
-            python close_price_crawler.py --upload-gdrive
-          fi
+      - name: 上傳衍生數據產物 (Parquet)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-derivatives-parquet
+          path: |
+            output_margin/api_margin_*.parquet
+            output_taifex/api_taifex_*.parquet
+            output/api_close1_*.parquet
+            output_tdcc/api_tdcc_*.parquet
+          retention-days: 14
 
       - name: 發送 Telegram 完成通知 (可選)
         if: ${{ github.event.inputs.send_notification == 'true' }}
@@ -98,7 +82,7 @@ jobs:
           token = os.getenv('TELEGRAM_BOT_TOKEN')
           chat_id = os.getenv('TELEGRAM_CHAT_ID')
           if token and chat_id:
-              msg = '🎉 [stock_data_downloader] 夜間資券與期貨數據已抓取並上傳雲端完成！'
+              msg = '🎉 [stock_data_downloader] 夜間資券與期貨衍生數據已抓取並同步 Google Drive 雲端完成！'
               url = f'https://api.telegram.org/bot{token}/sendMessage'
               requests.post(url, json={'chat_id': chat_id, 'text': msg}, timeout=10)
           "
