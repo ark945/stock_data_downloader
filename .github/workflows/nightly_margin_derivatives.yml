@@ -82,9 +82,9 @@ jobs:
           TARGET_DATE: ${{ github.event.inputs.target_date }}
         run: |
           if [ -n "$TARGET_DATE" ]; then
-            python twse_tpex_close_crawler.py --date "$TARGET_DATE" --upload-gdrive
+            python close_price_crawler.py --date "$TARGET_DATE" --upload-gdrive
           else
-            python twse_tpex_close_crawler.py --upload-gdrive
+            python close_price_crawler.py --upload-gdrive
           fi
 
       - name: 發送 Telegram 完成通知 (可選)
