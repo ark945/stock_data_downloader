@@ -64,8 +64,11 @@ def send_telegram_report(
     status_text = f"{market_display} 100% 完整產出" if failed_count == 0 else f"{market_display} 存在 {failed_count} 檔短缺"
     duration_display = duration_str or f"{elapsed_seconds/60:.1f} 分鐘"
 
+    is_gh = os.getenv("GITHUB_ACTIONS") == "true"
+    source_tag = "【雲端抓檔】" if is_gh else "【本機抓檔】"
     msg_lines = [
-        f"{status_icon} *【台股分點爬蟲日報 — {market_display}】*",
+        f"{status_icon} *{source_tag} 【台股分點爬蟲日報 — {market_display}】*",
+        f"💻 *執行環境*: `{source_tag}`",
         f"📅 *交易日期*: `{trade_date}`",
         f"🏢 *執行市場*: `{market_display}`",
         f"🎯 *採集達成率*: `{completion_rate:.1f}%` ({status_text})",
@@ -152,7 +155,9 @@ def send_crawler_report_email(
     status_text = f"{market_display} 100% 完整產出" if failed_count == 0 else f"{market_display} 存在 {failed_count} 檔短缺"
     duration_display = duration_str or f"{elapsed_seconds/60:.1f} 分鐘"
 
-    subject = f"{status_emoji} 【台股分點爬蟲日報】{trade_date} 執行成果 — {status_text}"
+    is_gh = os.getenv("GITHUB_ACTIONS") == "true"
+    source_tag = "【雲端抓檔】" if is_gh else "【本機抓檔】"
+    subject = f"{status_emoji} {source_tag} 【台股分點爬蟲日報】{trade_date} 執行成果 — {status_text}"
 
     if failed_count > 0:
         table_rows = "".join([

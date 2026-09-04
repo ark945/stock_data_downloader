@@ -133,7 +133,9 @@ def send_email_notification(
         """
 
     try:
-        subject = f"🚀 【台股{market_title}分點日報】{trade_date} 雲端矩陣採集完成 ({total_symbols:,} 檔 / {total_rows:,} 筆)"
+        is_gh = os.environ.get("GITHUB_ACTIONS") == "true"
+        source_tag = "【雲端抓檔】" if is_gh else "【本機抓檔】"
+        subject = f"🚀 {source_tag} 【台股{market_title}分點日報】{trade_date} 雲端矩陣採集完成 ({total_symbols:,} 檔 / {total_rows:,} 筆)"
         gdrive_btn = f"""
         <div style="margin: 25px 0; text-align: center;">
             <a href="{gdrive_link}" style="background-color: #1a73e8; color: #ffffff; padding: 12px 25px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block;">
