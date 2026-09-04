@@ -17,6 +17,9 @@ on:
         required: false
         default: ""
 
+  repository_dispatch:
+    types: [trigger-weekly-tdcc, run-weekly-tdcc]
+
 jobs:
   crawl-tdcc:
     name: 抓取最新集保千張大戶股權分散表

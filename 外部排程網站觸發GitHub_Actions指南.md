@@ -148,6 +148,36 @@ Content-Type: application/json
 
 ---
 
+
+---
+
+### 4.3 每週六集保千張大戶股權分散表專案 (`stock_data_downloader`)
+
+* **目標工作流程檔案**：`weekly_tdcc_crawler.yml`
+* **請求網址 (URL)**：
+  ```
+  https://api.github.com/repos/ark945/stock_data_downloader/actions/workflows/weekly_tdcc_crawler.yml/dispatches
+  ```
+* **建議觸發時間 (台灣時間)**：
+  - 每週六 **09:30** (官方通常於週六 08:30~09:00 公布當週五數據)
+* **Request Method**：`POST`
+* **Request Headers**：
+  | Header Key | Header Value |
+  | :--- | :--- |
+  | `Accept` | `application/vnd.github+json` |
+  | `Authorization` | `Bearer ghp_你的GitHub經典Token` |
+  | `X-GitHub-Api-Version` | `2022-11-28` |
+  | `User-Agent` | `CronJob-Trigger-Bot` |
+* **Request Body**：
+  ```json
+  {
+    "ref": "main"
+  }
+  ```
+* **回傳代碼**：`204 No Content` (代表成功啟動)
+
+---
+
 ## 5. 常見錯誤與除錯排解 (FAQ)
 
 ### Q1: 測試時收到 `404 Not Found` 錯誤？

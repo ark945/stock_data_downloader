@@ -26,6 +26,9 @@ on:
         required: true
         default: "all"
 
+  repository_dispatch:
+    types: [trigger-daily-crawler, run-daily-crawler]
+
 jobs:
   # -----------------------------------------------------------------
   # 前置極速檢查：3 秒查詢 Google Drive 是否已有當日資料 (已存在則跳過後續)
