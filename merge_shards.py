@@ -356,11 +356,56 @@ def merge_parquet_shards(output_dir: str = "output", trade_date: str = "", marke
                 target_files = sorted(glob.glob(os.path.join(output_dir, shard_glob)))
 
     if not target_files:
-        print("[!] 查無任何待合併的 Parquet 產物！檢查是否已有單一完整檔...")
-        existing = glob.glob(os.path.join(output_dir, f"api_absr1_*{market_suffix}.parquet"))
-        if existing:
-            print(f"[✓] 已存在完整資料庫: {existing[0]}")
-        return
+        err_msg = f"[!] 嚴重錯誤: 未找到任何待聚合的 {market.upper()} 分片檔案！無法進行合併。"
+        print(err_msg, file=sys.stderr)
+        tg_token = os.environ.get("TELEGRAM_BOT_TOKEN")
+        tg_chat = os.environ.get("TELEGRAM_CHAT_ID")
+        if tg_token and tg_chat:
+            send_telegram_alert(tg_token, tg_chat, f"🚨 *【分片聚合中斷警報】*\n市場: `{market.upper()}`\n原因: 未找到任何待聚合分片！已強制阻斷以防殘缺資料。")
+        sys.exit(1)
+
+    # 嚴格分片完整性檢查 (Strict Integrity Guard)
+    if market in ["twse", "tpex"]:
+        expected_count = 6 if market == "twse" else 8
+        found_shards = set()
+        for f in target_files:
+            m = re.search(rf"{market}_shard_(\d+)", os.path.basename(f), re.IGNORECASE)
+            if m:
+                found_shards.add(int(m.group(1)))
+        
+        expected_set = set(range(expected_count))
+        missing_shards = expected_set - found_shards
+        if missing_shards:
+            sep = "=" * 70
+            err_msg = (
+                f"\n{sep}\n"
+                f"❌ [嚴重錯誤] {market.upper()} 分片缺失！嚴禁產出殘缺資料庫！\n"
+                f"   - 預期分片總數: {expected_count} 個 (Shard 0 ~ {expected_count - 1})\n"
+                f"   - 實際取得分片: {len(found_shards)} 個 ({sorted(list(found_shards))})\n"
+                f"   - 缺漏分片編號: {sorted(list(missing_shards))}\n"
+                f"⚠️ 為確保全市場交易資料之 100% 完整性，流程立即中斷 (Fail-Closed)！\n"
+                f"{sep}\n"
+            )
+            print(err_msg, file=sys.stderr)
+            tg_token = os.environ.get("TELEGRAM_BOT_TOKEN")
+            tg_chat = os.environ.get("TELEGRAM_CHAT_ID")
+            if tg_token and tg_chat:
+                send_telegram_alert(
+                    tg_token, tg_chat,
+                    f"🚨 *【{market.upper()} 分片短缺致命警報】*\n"
+                    f"📅 日期: `{trade_date or get_taipei_now().strftime('%Y-%m-%d')}`\n"
+                    f"❌ 缺漏分片: `Shard {sorted(list(missing_shards))}`\n"
+                    f"🛑 系統已主動中斷聚合，嚴防殘缺數據上傳覆蓋雲端資料庫！"
+                )
+            sys.exit(1)
+    elif market == "all":
+        has_twse = any("_twse" in os.path.basename(f).lower() for f in target_files)
+        has_tpex = any("_tpex" in os.path.basename(f).lower() for f in target_files)
+        if not (has_twse and has_tpex):
+            err_msg = f"❌ [嚴重錯誤] 全市場聚合缺少市場檔案！(TWSE: {has_twse}, TPEX: {has_tpex})，立即中斷！\n"
+            print(err_msg, file=sys.stderr)
+            sys.exit(1)
+
 
     print(f"[+] 找到 {len(target_files)} 個待合併 Parquet 檔案:")
     for f in target_files:
