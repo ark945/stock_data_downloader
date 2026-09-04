@@ -29,3 +29,5 @@ debug_*.csv
 output_margin/
 output_taifex/
 output_tdcc/
+
+twse_holidays_cache.json
