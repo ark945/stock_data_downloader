@@ -43,7 +43,7 @@ jobs:
 
       - name: 安裝極速爬蟲依賴套件
         run: |
-          pip install requests pandas pyarrow google-api-python-client google-auth
+          pip install requests pandas pyarrow beautifulsoup4 lxml google-api-python-client google-auth
 
       - name: 執行輕量爬蟲對齊與補齊 (融資券 + 期貨 + 收盤價 + 集保)
         env:
