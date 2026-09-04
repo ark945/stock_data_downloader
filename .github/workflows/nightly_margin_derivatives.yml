@@ -1,0 +1,104 @@
+name: 夜間資券與衍生品極速爬蟲 (Nightly Margin & Derivatives)
+
+env:
+  TZ: "Asia/Taipei"
+  PYTHONIOENCODING: "utf-8"
+
+on:
+  schedule:
+    # 證交所與櫃買中心融資融券固定於 21:30~22:00 公布
+    # 設定週一至週五 台北時間 22:05 (UTC 14:05) 自動執行
+    - cron: "5 14 * * 1-5"
+
+  workflow_dispatch:
+    inputs:
+      target_date:
+        description: "指定日期 (YYYY-MM-DD，留空則自動判斷最新交易日)"
+        required: false
+        default: ""
+      send_notification:
+        description: "是否發送 Telegram / LINE 完成通知"
+        required: false
+        type: boolean
+        default: false
+
+  repository_dispatch:
+    types: [trigger-margin-derivatives, run-margin-derivatives]
+
+jobs:
+  crawl-margin-derivatives:
+    name: 抓取上市櫃融資融券與盤後衍生品 (約 30 秒)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: 簽出代碼庫 (Checkout)
+        uses: actions/checkout@v4
+
+      - name: 設置 Python 環境
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: 安裝極速爬蟲依賴套件
+        run: |
+          pip install requests pandas pyarrow google-api-python-client google-auth
+
+      - name: 執行上市櫃融資融券爬蟲 (TWSE & TPEX Margin)
+        env:
+          PYTHONIOENCODING: "utf-8"
+          GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
+          GDRIVE_UPLOAD_URL: ${{ secrets.GDRIVE_UPLOAD_URL }}
+          GDRIVE_SERVICE_ACCOUNT_KEY: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_KEY }}
+          TARGET_DATE: ${{ github.event.inputs.target_date }}
+        run: |
+          if [ -n "$TARGET_DATE" ]; then
+            python twse_margin_crawler.py --date "$TARGET_DATE" --upload-gdrive
+          else
+            python twse_margin_crawler.py --upload-gdrive
+          fi
+
+      - name: 執行盤後期貨大額多空爬蟲 (TAIFEX Futures)
+        env:
+          PYTHONIOENCODING: "utf-8"
+          GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
+          GDRIVE_UPLOAD_URL: ${{ secrets.GDRIVE_UPLOAD_URL }}
+          GDRIVE_SERVICE_ACCOUNT_KEY: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_KEY }}
+          TARGET_DATE: ${{ github.event.inputs.target_date }}
+        run: |
+          if [ -n "$TARGET_DATE" ]; then
+            python taifex_futures_crawler.py --date "$TARGET_DATE" --upload-gdrive
+          else
+            python taifex_futures_crawler.py --upload-gdrive
+          fi
+
+      - name: 驗證並補齊當日收盤行情與三大法人 (TWSE & TPEX Close)
+        env:
+          PYTHONIOENCODING: "utf-8"
+          GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
+          GDRIVE_UPLOAD_URL: ${{ secrets.GDRIVE_UPLOAD_URL }}
+          GDRIVE_SERVICE_ACCOUNT_KEY: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_KEY }}
+          TARGET_DATE: ${{ github.event.inputs.target_date }}
+        run: |
+          if [ -n "$TARGET_DATE" ]; then
+            python twse_tpex_close_crawler.py --date "$TARGET_DATE" --upload-gdrive
+          else
+            python twse_tpex_close_crawler.py --upload-gdrive
+          fi
+
+      - name: 發送 Telegram 完成通知 (可選)
+        if: ${{ github.event.inputs.send_notification == 'true' }}
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python -c "
+          import os, requests
+          token = os.getenv('TELEGRAM_BOT_TOKEN')
+          chat_id = os.getenv('TELEGRAM_CHAT_ID')
+          if token and chat_id:
+              msg = '🎉 [stock_data_downloader] 夜間資券與期貨數據已抓取並上傳雲端完成！'
+              url = f'https://api.telegram.org/bot{token}/sendMessage'
+              requests.post(url, json={'chat_id': chat_id, 'text': msg}, timeout=10)
+          "
