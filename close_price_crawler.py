@@ -29,6 +29,7 @@ import time
 import argparse
 from datetime import datetime, timezone, timedelta
 from typing import Optional
+from trading_calendar import is_trading_day, get_latest_trading_date as tc_get_latest_trading_date, should_proceed_crawler
 import requests
 import pandas as pd
 
@@ -58,18 +59,8 @@ def get_taipei_now() -> datetime:
 
 
 def get_latest_trading_date() -> str:
-    """精確計算台股最新交易日 (規則與 stock_crawler_coordinator.py 一致)"""
-    now = get_taipei_now()
-    w = now.weekday()
-    if w == 5:
-        delta = 1
-    elif w == 6:
-        delta = 2
-    elif w == 0:
-        delta = 0 if now.hour >= 17 else 3
-    else:
-        delta = 0 if now.hour >= 17 else 1
-    return (now - pd.Timedelta(days=delta)).strftime("%Y-%m-%d")
+    """計算台股最新真實開盤交易日 (由 trading_calendar 智慧日曆驅動)"""
+    return tc_get_latest_trading_date()
 
 
 def log_msg(msg: str):
@@ -424,6 +415,8 @@ def main():
     parser.add_argument("--output-dir", type=str, default=None, help="指定輸出目錄")
     parser.add_argument("--no-gdrive", action="store_true", help="略過 Google Drive 上傳 (測試用)")
     parser.add_argument("--no-daily-files", action="store_true", help="區間模式下略過每日單独檔案，僅輸出合併檔")
+    parser.add_argument("--force", action="store_true", help="強制抓取，忽略營業日/開盤日休市檢查")
+    parser.add_argument("--no-check-trading-day", action="store_true", help="停用營業日檢查")
     args = parser.parse_args()
 
     if args.start_date or args.end_date:
@@ -438,8 +431,13 @@ def main():
             save_daily=not args.no_daily_files,
         )
     else:
+        target_date = args.date or get_latest_trading_date()
+        if not args.no_check_trading_day:
+            if not should_proceed_crawler(target_date, force=args.force):
+                log_msg(f"今日 ({target_date}) 為休市日，爬蟲已按設定優雅跳過。")
+                return
         run_close_price_crawler(
-            trade_date=args.date,
+            trade_date=target_date,
             markets=args.market,
             output_dir=args.output_dir,
             upload_gdrive=not args.no_gdrive,

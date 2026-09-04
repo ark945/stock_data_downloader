@@ -387,6 +387,8 @@ def main():
     parser.add_argument("--num-shards", type=int, default=1, help="分散式總分片數 (預設 1)")
     parser.add_argument("--with-close-price", action="store_true", help="同步抓取當日 TWSE/TPEX 收盤價 (api_close1_*.parquet)，僅單機模式支援")
     parser.add_argument("--limit-symbols", type=int, default=None, help="限制本次執行標的數，供 CI probe 快速驗證使用")
+    parser.add_argument("--force", action="store_true", help="強制抓取，忽略營業日/開盤日休市檢查")
+    parser.add_argument("--no-check-trading-day", action="store_true", help="停用營業日檢查")
 
     args = parser.parse_args()
 
@@ -413,6 +415,13 @@ def main():
     try:
         print(f"[*] [日誌系統] 執行日誌檔案已建立: {log_filepath}")
         sys.stdout.flush()
+
+        target_d = args.date or get_latest_trading_date()
+        if not args.no_check_trading_day:
+            from trading_calendar import should_proceed_crawler
+            if not should_proceed_crawler(target_d, force=args.force):
+                log_msg(f"今日 ({target_d}) 為休市日，全市場分點爬蟲已依設定優雅跳過。")
+                return
 
         run_full_market_crawler(
             trade_date=args.date,

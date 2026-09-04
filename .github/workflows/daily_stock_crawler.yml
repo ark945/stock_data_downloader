@@ -51,6 +51,28 @@ jobs:
         run: |
           pip install requests google-api-python-client google-auth
 
+      - name: 判斷今日是否為台股營業日 (Trading Day Pre-check)
+        id: trading_day_check
+        run: |
+          TARGET="${{ github.event.inputs.target_date }}"
+          EVENT="${{ github.event_name }}"
+          FORCE="${{ secrets.FORCE_CRAWL }}"
+          
+          if [ "$EVENT" = "workflow_dispatch" ] && [ -n "$TARGET" ]; then
+            echo "[*] 手動指定日期 ($TARGET)，繼續後續流程。"
+            echo "is_open=true" >> $GITHUB_OUTPUT
+          elif [ "$FORCE" = "true" ]; then
+            echo "[*] 檢測到 FORCE_CRAWL 旗標，繼續後續流程。"
+            echo "is_open=true" >> $GITHUB_OUTPUT
+          else
+            if python trading_calendar.py --check-today; then
+              echo "is_open=true" >> $GITHUB_OUTPUT
+            else
+              echo "is_open=false" >> $GITHUB_OUTPUT
+              echo "[⏸️] 本日非台股開盤營業日，休市自動跳過後續所有抓取作業！"
+            fi
+          fi
+
       - name: 查詢 Google Drive 目標資料夾
         id: check
         env:
@@ -72,7 +94,15 @@ jobs:
             echo "target_date=$SPECIFIED_DATE" >> $GITHUB_OUTPUT
             echo "[*] 手動強制指定日期 ($SPECIFIED_DATE)，略過自動快篩，強制執行採集。"
           else
-            python "$CHECK_SCRIPT" "$SPECIFIED_DATE"
+                      # 若經由營業日檢查判定為休市日，直接設定 should_skip 並跳過
+          if [ "${{ steps.trading_day_check.outputs.is_open }}" = "false" ]; then
+            echo "should_skip=true" >> $GITHUB_OUTPUT
+            echo "target_date=$(python trading_calendar.py --latest 2>/dev/null || date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+            echo "[*] 休市日標記 should_skip=true，優雅跳過本日全部爬蟲排程。"
+            exit 0
+          fi
+
+          python "$CHECK_SCRIPT" "$SPECIFIED_DATE"
           fi
 
   # -----------------------------------------------------------------

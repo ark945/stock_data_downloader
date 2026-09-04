@@ -107,6 +107,21 @@ def should_skip_crawler(specified_date: str = "") -> Tuple[bool, str]:
     now = get_taipei_now()
     target_date = specified_date.strip() if specified_date else get_expected_trade_date(now)
     
+    
+    # 營業日判定 (非營業日直接判定跳過，避免無效檢查與爬取)
+    force_env = os.environ.get("FORCE_CRAWL", "false").lower() in ("true", "1", "yes")
+    check_env = os.environ.get("CHECK_TRADING_DAY", "true").lower() in ("true", "1", "yes")
+    if not specified_date and not force_env and check_env:
+        try:
+            from trading_calendar import is_trading_day
+            is_open, reason = is_trading_day(target_date, check_live_probe=True)
+            if not is_open:
+                print(f"[⏸️] 【休市跳過提示】{target_date} 非台股營業日 ({reason})")
+                print(f"[*] Pre-check 直接標記 should_skip=True，優雅跳過本日全部排程！")
+                return True, target_date
+        except Exception as _te:
+            pass
+
     target_compact = target_date.replace("-", "")
     target_hyphen = target_date if "-" in target_date else f"{target_date[:4]}-{target_date[4:6]}-{target_date[6:]}"
 

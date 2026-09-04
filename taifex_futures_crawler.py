@@ -262,6 +262,8 @@ def main():
     parser.add_argument("--output-dir", default="./output_taifex", help="Parquet 儲存目錄")
     parser.add_argument("--delay", type=float, default=0.8, help="批次請求間隔延遲 (秒，預設: 0.8)")
     parser.add_argument("--overwrite", action="store_true", help="強制重新下載覆蓋現有檔案")
+    parser.add_argument("--force", action="store_true", help="強制抓取，忽略營業日/開盤日休市檢查")
+    parser.add_argument("--no-check-trading-day", action="store_true", help="停用營業日檢查")
 
     args = parser.parse_args()
 
@@ -273,6 +275,11 @@ def main():
         return
 
     target_d = args.date if args.date else today_str
+    if not args.no_check_trading_day:
+        from trading_calendar import should_proceed_crawler
+        if not should_proceed_crawler(target_d, force=args.force):
+            print(f"[*] 今日 ({target_d}) 為休市日，期交所期貨爬蟲已依設定優雅跳過。")
+            return
     download_taifex_futures_for_date(target_d, output_dir=args.output_dir, overwrite=args.overwrite)
 
 
