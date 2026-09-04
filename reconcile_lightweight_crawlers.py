@@ -1,17 +1,17 @@
 # -*- coding: utf-8 -*-
 """
-輕量爬蟲失敗補齊與自動對齊調度器 (Reconcile Lightweight Crawlers)
-=================================================================
-核心防護機制：
-1. 針對官方延遲發布 (如融資券 17:30~18:30 發布) 或網路抖動提供【多重指數退避重試】。
-2. 自動檢測與補齊四大輕量數據：
-   - 每日日K收盤價 (api_close1_*.parquet)
-   - 每日融資融券與券資比 (api_margin_*.parquet)
-   - 每日期交所三大法人期貨與散戶小台 (api_taifex_*.parquet)
-   - 每週五集保千張大戶股權分散 (api_tdcc_*.parquet)
-3. 自動同步至 Google Drive 雲端資料夾，確保分析端 (20:07) 100% 有完整數據可讀。
-4. 支援 GitHub Actions 工作流雙階段調用 (盤後初抓 + 合併後二次確認)。
-5. 支援 `--start-date` 歷史區間批次自動補漏。
+輕量爬蟲失敗補齊與自動對齊調度器 (Reconciliation & Recovery Coordinator)
+========================================================================
+負責在雲端或本地自動檢查四大核心輕量數據：
+1. 收盤價 (Close Price) -> api_close1_{date}_{date}.parquet
+2. 融資融券與券資比 (Margin Trading) -> api_margin_{date}_{date}.parquet
+3. 期交所大盤期權留倉 (TAIFEX Futures) -> api_taifex_{date}_{date}.parquet
+4. 集保千張大戶股權分散表 (TDCC Shareholding) -> api_tdcc_{friday}_{friday}.parquet
+
+具備：
+- 缺檔自動補抓與重試 (Backoff Retry)
+- Google Drive 雲端同步
+- 假日與週次智能對齊 (TDCC 週六 09:00 官方發布時間差智慧防呆)
 """
 
 import os
@@ -19,7 +19,7 @@ import sys
 import time
 import argparse
 from datetime import datetime, timedelta, timezone
-from typing import Optional, List, Dict, Any
+from typing import Dict, List, Optional
 
 try:
     from dotenv import load_dotenv
@@ -145,30 +145,54 @@ def reconcile_taifex(trade_date: str, max_retries: int = 3) -> bool:
 
 
 def reconcile_tdcc(trade_date: str) -> bool:
-    """補齊集保千張大戶股權分散表 (每週五)"""
+    """
+    補齊集保千張大戶股權分散表 (每週五基準，官方固定於週六 08:30~09:00 發布)
+    邏輯：
+    1. 計算相對於 trade_date 的最近基準週五 (target_friday)。
+    2. 若 target_friday 的集保資料已存在，標記為就緒。
+    3. 若缺失：
+       - 若 trade_date 本身是週五 (平日盤後)：嘗試預先抓取。若官方尚未更新當週數據，則智能略過並提示週六排程補齊，不阻礙當日流程。
+       - 若 trade_date 是其他日子 (如週一開盤補檢)：官方肯定已發布，執行補抓並上傳 GDrive。
+    """
     dt = datetime.strptime(trade_date, "%Y-%m-%d")
-    # 若為週五 (weekday == 4)，執行集保抓取
-    if dt.weekday() != 4:
-        return True
+    if dt.weekday() == 4:
+        target_friday = trade_date
+    elif dt.weekday() < 4:
+        prev_friday_dt = dt - timedelta(days=dt.weekday() + 3)
+        target_friday = prev_friday_dt.strftime("%Y-%m-%d")
+    else:
+        this_friday_dt = dt - timedelta(days=dt.weekday() - 4)
+        target_friday = this_friday_dt.strftime("%Y-%m-%d")
 
-    filename = f"api_tdcc_{trade_date}_{trade_date}.parquet"
+    filename = f"api_tdcc_{target_friday}_{target_friday}.parquet"
     out_dir = "./output_tdcc"
     out_path = os.path.join(out_dir, filename)
 
     if os.path.exists(out_path):
-        print(f"[✓] {trade_date} 集保股權分散檔案已存在: {filename}")
+        print(f"[✓] {target_friday} 集保股權分散檔案已存在: {filename}")
         return True
 
-    print(f"[*] 偵測到今日為週五，開始執行集保股權分散補齊 ({trade_date})...")
+    print(f"[*] 正在檢查集保股權分散表 (基準週五: {target_friday})...")
     try:
         from tdcc_shareholding_crawler import download_latest_tdcc
-        res = download_latest_tdcc(output_dir=out_dir, overwrite=True)
+        res = download_latest_tdcc(
+            output_dir=out_dir,
+            overwrite=True,
+            expected_date=target_friday if dt.weekday() == 4 else None,
+            upload_gdrive=True
+        )
         if res and os.path.exists(res):
             upload_if_available(res)
-            print(f"[✓] 集保股權分散補齊成功！")
+            print(f"[✓] {target_friday} 集保股權分散補齊成功！")
+            return True
+        elif dt.weekday() == 4:
+            print(f"[ℹ️] 提示：今日為週五晚間，TDCC 官方通常於週六上午 08:30~09:00 發布當週資料。")
+            print(f"    系統已配置週六 09:30 專屬排程與下週一開盤自動對齊，本次暫不阻擋流程。")
             return True
     except Exception as e:
         print(f"[!] 集保抓取異常: {e}")
+        if dt.weekday() == 4:
+            return True
     return False
 
 

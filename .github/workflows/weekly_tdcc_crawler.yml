@@ -1,0 +1,60 @@
+name: 每週集保股權分散表爬蟲 (TDCC Saturday 09:30)
+
+env:
+  TZ: "Asia/Taipei"
+  PYTHONIOENCODING: "utf-8"
+
+on:
+  schedule:
+    # 官方固定於每週六上午 08:30~09:00 公布當週五數據
+    # 設定每週六台北時間 09:30 (UTC 01:30) 自動執行
+    - cron: "30 1 * * 6"
+
+  workflow_dispatch:
+    inputs:
+      target_date:
+        description: "指定基準週五日期 (YYYY-MM-DD，留空則抓取官方最新一週)"
+        required: false
+        default: ""
+
+jobs:
+  crawl-tdcc:
+    name: 抓取最新集保千張大戶股權分散表
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: 簽出代碼庫 (Checkout)
+        uses: actions/checkout@v4
+
+      - name: 設置 Python 環境
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: 安裝 Python 輕量依賴套件
+        run: |
+          pip install requests pandas pyarrow google-api-python-client google-auth
+
+      - name: 執行集保股權分散表爬蟲
+        env:
+          PYTHONIOENCODING: "utf-8"
+          GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
+          GDRIVE_UPLOAD_URL: ${{ secrets.GDRIVE_UPLOAD_URL }}
+          GDRIVE_SERVICE_ACCOUNT_KEY: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_KEY }}
+          TARGET_DATE: ${{ github.event.inputs.target_date }}
+        run: |
+          if [ -n "$TARGET_DATE" ]; then
+            python tdcc_shareholding_crawler.py --date "$TARGET_DATE" --upload-gdrive
+          else
+            python tdcc_shareholding_crawler.py --upload-gdrive
+          fi
+
+      - name: 上傳集保數據產物 (Parquet)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tdcc-shareholding-parquet
+          path: output_tdcc/api_tdcc_*.parquet
+          retention-days: 14

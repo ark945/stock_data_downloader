@@ -3,7 +3,7 @@
 集保股權分散表與千張大戶持股比例爬蟲 (TDCC)
 ==============================================
 功能特點：
-1. 抓取集保結算所官方股權分散表 (TDCC Open Data CSV + 歷史查詢)。
+1. 抓取集保結算所官方股權分散表 (TDCC Open Data CSV)。
 2. 全市場 2,000+ 檔個股一次性向量化清洗與聚合：
    - `large_shareholder_pct`: 1,000 張以上大戶持股比例 (%)
    - `large_shareholder_count`: 1,000 張以上大戶股東人數
@@ -11,8 +11,11 @@
    - `retail_shareholder_count`: 50 張以下散戶股東人數
    - `total_shareholders`: 總股東人數 (持股分級 17)
    - `total_shares`: 總股數
-3. 支援 `--date`、`--start-date` 與 `--end-date` 週次回補自 2026-06-01 至今各週五數據。
-4. 產出規範：api_tdcc_{YYYY-MM-DD}_{YYYY-MM-DD}.parquet。
+3. 支援 `--date` (expected_date) 版本比對防呆：
+   - 官方通常於每週六 08:30~09:00 公布當週五數據。
+   - 週五晚間若未發布，能精準辨識並避免覆蓋舊檔案。
+4. 支援 `--upload-gdrive` 直接雲端同步。
+5. 產出規範：api_tdcc_{YYYY-MM-DD}_{YYYY-MM-DD}.parquet。
 """
 
 import os
@@ -25,7 +28,6 @@ from typing import Optional, List, Dict, Any
 import requests
 import pandas as pd
 import numpy as np
-from bs4 import BeautifulSoup
 
 try:
     from dotenv import load_dotenv
@@ -62,18 +64,21 @@ def fetch_latest_tdcc_opendata() -> pd.DataFrame:
     URL: https://smart.tdcc.com.tw/opendata/getOD.ashx?id=1-5
     """
     url = "https://smart.tdcc.com.tw/opendata/getOD.ashx?id=1-5"
-    try:
-        print("[*] 正在從 TDCC Open Data 串流下載全市場股權分散 CSV...")
-        resp = requests.get(url, headers=HEADERS, timeout=25)
-        if resp.status_code != 200:
-            print(f"[!] TDCC Open Data 狀態碼異常: {resp.status_code}")
-            return pd.DataFrame()
+    for attempt in range(1, 4):
+        try:
+            print(f"[*] 正在從 TDCC Open Data 串流下載全市場股權分散 CSV (嘗試 {attempt}/3)...")
+            resp = requests.get(url, headers=HEADERS, timeout=45)
+            if resp.status_code != 200:
+                print(f"[!] TDCC Open Data 狀態碼異常: {resp.status_code}")
+                time.sleep(3)
+                continue
 
-        df_raw = pd.read_csv(io.StringIO(resp.text), dtype={"證券代號": str, "持股分級": int})
-        return df_raw
-    except Exception as e:
-        print(f"[!] 下載 TDCC Open Data 失敗: {e}")
-        return pd.DataFrame()
+            df_raw = pd.read_csv(io.StringIO(resp.text), dtype={"證券代號": str, "持股分級": int})
+            return df_raw
+        except Exception as e:
+            print(f"[!] 下載 TDCC Open Data 異常 (嘗試 {attempt}/3): {e}")
+            time.sleep(3)
+    return pd.DataFrame()
 
 
 def process_tdcc_raw_df(df_raw: pd.DataFrame) -> pd.DataFrame:
@@ -158,18 +163,39 @@ def process_tdcc_raw_df(df_raw: pd.DataFrame) -> pd.DataFrame:
     return merged
 
 
-def download_latest_tdcc(output_dir: str = "./output_tdcc", overwrite: bool = False) -> Optional[str]:
-    """下載最新週次全市場集保股權分散資料並存為 Parquet"""
+def download_latest_tdcc(
+    output_dir: str = "./output_tdcc",
+    overwrite: bool = False,
+    expected_date: Optional[str] = None,
+    upload_gdrive: bool = False
+) -> Optional[str]:
+    """
+    下載最新週次全市場集保股權分散資料並存為 Parquet。
+    :param output_dir: 輸出目錄
+    :param overwrite: 是否覆蓋已存在檔案
+    :param expected_date: 期望的基準週五日期 (YYYY-MM-DD)。若官方尚未公布本週資料，則優雅返回 None，避免寫入過期舊檔。
+    :param upload_gdrive: 完成後是否同步至 Google Drive
+    """
     os.makedirs(output_dir, exist_ok=True)
     df_raw = fetch_latest_tdcc_opendata()
     if df_raw.empty:
+        print("[!] 無法取得 TDCC 數據，請稍後重試。")
         return None
 
     df_clean = process_tdcc_raw_df(df_raw)
     if df_clean.empty:
+        print("[!] TDCC 資料清洗結果為空。")
         return None
 
-    trade_date = df_clean["trade_date"].iloc[0]
+    actual_date = df_clean["trade_date"].iloc[0]
+
+    # 防呆校驗：若指定期望日期，但官方尚未更新至該日期
+    if expected_date and actual_date < expected_date:
+        print(f"[!] TDCC 官方尚未發布目標日期 ({expected_date}) 之資料 (目前最新為: {actual_date})。")
+        print("[!] 提示：集保股權分散表通常於每週六 08:30~09:00 由官方產出，系統將由週六專屬排程或下週一開盤前自動補齊。")
+        return None
+
+    trade_date = actual_date
     out_filename = f"api_tdcc_{trade_date}_{trade_date}.parquet"
     out_path = os.path.join(output_dir, out_filename)
 
@@ -179,16 +205,33 @@ def download_latest_tdcc(output_dir: str = "./output_tdcc", overwrite: bool = Fa
 
     df_clean.to_parquet(out_path, index=False, engine="pyarrow")
     print(f"[✓] {trade_date} 全市場集保股權分散已儲存: {out_filename} (共 {len(df_clean)} 檔標的)")
+
+    if upload_gdrive:
+        try:
+            from gdrive_sync import upload_file_to_gdrive
+            res = upload_file_to_gdrive(out_path)
+            if res:
+                print(f"[✓] 成功同步集保分散表至 Google Drive: {out_filename}")
+        except Exception as e:
+            print(f"[!] Google Drive 上傳提示: {e}")
+
     return out_path
 
 
 def main():
     parser = argparse.ArgumentParser(description="集保股權分散表與千張大戶持股比例爬蟲 (TDCC)")
     parser.add_argument("--output-dir", default="./output_tdcc", help="Parquet 儲存目錄")
+    parser.add_argument("--date", default="", help="期望的目標日期 (YYYY-MM-DD，官方未發布則自動跳過)")
     parser.add_argument("--overwrite", action="store_true", help="強制覆蓋現有檔案")
+    parser.add_argument("--upload-gdrive", action="store_true", help="下載完成後同步至 Google Drive")
 
     args = parser.parse_args()
-    download_latest_tdcc(output_dir=args.output_dir, overwrite=args.overwrite)
+    download_latest_tdcc(
+        output_dir=args.output_dir,
+        overwrite=args.overwrite,
+        expected_date=args.date if args.date else None,
+        upload_gdrive=args.upload_gdrive
+    )
 
 
 if __name__ == "__main__":
