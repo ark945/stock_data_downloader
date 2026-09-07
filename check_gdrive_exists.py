@@ -87,10 +87,24 @@ def check_gdrive_via_service_account(folder_id: str, target_date_compact: str, t
         results = service.files().list(q=query, fields="files(id, name, size)", pageSize=10).execute()
         files = results.get("files", [])
         
-        # 檢查是否有全市場整合檔或 TWSE 檔案且大小 > 50KB
-        valid_files = [f for f in files if int(f.get("size", 0)) > 50000]
+        # 嚴格過濾：防範 Google Drive API 分詞匹配漏洞 (例如 2026-07-09 被誤配為 2026-09-07)
+        # 1. 檔名必須嚴格包含完整日期字串 (YYYYMMDD 或 YYYY-MM-DD)
+        # 2. 必須為分點資料庫 (包含 api_absr1 或 twse 或 tpex，排除僅有 margin/close1 的情況)
+        # 3. 檔案大小大於 50KB
+        valid_files = []
+        for f in files:
+            fname = f.get("name", "")
+            fsize = int(f.get("size", 0))
+            has_date = (target_date_compact in fname) or (target_date_hyphen in fname)
+            is_absr_or_market = any(k in fname for k in ["api_absr1", "twse", "tpex"]) and not any(k in fname for k in ["api_margin", "api_close1", "api_taifex", "api_tdcc"])
+            
+            if has_date and is_absr_or_market and fsize > 50000:
+                valid_files.append(f)
+            elif not has_date:
+                print(f"[*] 忽略非目標日期之搜尋結果: {fname} (ID: {f.get('id')})")
+
         if valid_files:
-            print(f"[✓] Google Drive API 查詢成功：找到 {len(valid_files)} 個有效資料庫檔案：")
+            print(f"[✓] Google Drive API 查詢成功：找到 {len(valid_files)} 個目標日期有效資料庫檔案：")
             for vf in valid_files:
                 print(f"    - {vf.get('name')} (ID: {vf.get('id')}, Size: {int(vf.get('size', 0)):,} bytes)")
             return True
