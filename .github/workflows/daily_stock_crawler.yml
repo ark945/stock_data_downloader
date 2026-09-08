@@ -419,6 +419,7 @@ jobs:
               rm -rf output/*.parquet output/logs/crawler_tpex_shard_0.log logs/crawler_tpex_shard_0.log downloads_tpex_cloud || true
               pkill -9 -f 'chrome|chromium' 2>/dev/null || true
               warp-cli --accept-tos disconnect 2>/dev/null || true
+              warp-cli --accept-tos registration new 2>/dev/null || warp-cli --accept-tos register 2>/dev/null || true
               sleep 8
               warp-cli --accept-tos connect 2>/dev/null || true
               sleep "$COOLDOWN"
@@ -538,6 +539,7 @@ jobs:
               rm -rf output/*_tpex_shard_${{ matrix.shard }}.parquet output/logs/crawler_tpex_shard_${{ matrix.shard }}.log logs/crawler_tpex_shard_${{ matrix.shard }}.log downloads_tpex_cloud || true
               pkill -9 -f 'chrome|chromium' 2>/dev/null || true
               warp-cli --accept-tos disconnect 2>/dev/null || true
+              warp-cli --accept-tos registration new 2>/dev/null || warp-cli --accept-tos register 2>/dev/null || true
               sleep 8
               warp-cli --accept-tos connect 2>/dev/null || true
               sleep "$COOLDOWN"

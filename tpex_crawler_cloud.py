@@ -286,11 +286,28 @@ class TPEXCloudCrawler:
             return None
 
     def _wait_token(self, page, timeout: float = 30.0, last_used_token: str = "") -> str:
-        """等待並提取全新 Cloudflare Turnstile 授權 Token"""
+        """等待並提取全新 Cloudflare Turnstile 授權 Token (支援隱形模式與互動式打勾框穿透)"""
         start_wait = time.time()
         while time.time() - start_wait < timeout:
             try:
                 page.run_js("if (window.turnstile && window.turnstile.execute) { try { window.turnstile.execute(); } catch(e){} }")
+
+                # 防護：偵測並穿透 Cloudflare Turnstile iframe (防範 Interactive Challenge「請確認您是人類」打勾框)
+                try:
+                    for frame in page.get_frames():
+                        f_url = frame.url or ""
+                        if "challenges" in f_url or "cloudflare" in f_url or "turnstile" in f_url:
+                            cb = (
+                                frame.ele("tag:input@type=checkbox", timeout=0.2) or
+                                frame.ele("@id=cf-stage", timeout=0.2) or
+                                frame.ele(".ctp-checkbox-label", timeout=0.2) or
+                                frame.ele(".ctp-checkbox-container", timeout=0.2)
+                            )
+                            if cb:
+                                cb.click()
+                except Exception:
+                    pass
+
                 t = page.run_js("""
                     let tok = '';
                     const el = document.querySelector('input[name="cf-turnstile-response"]') || 
@@ -383,7 +400,8 @@ class TPEXCloudCrawler:
                 pass
             if sys.platform.startswith("linux"):
                 os.system("pkill -9 -f 'chrome|chromium' 2>/dev/null || true")
-                os.system("warp-cli --accept-tos disconnect 2>/dev/null; sleep 2; warp-cli --accept-tos connect 2>/dev/null; sleep 8 || true")
+                # 強制重新註冊獲取全新 WARP IP，徹底擺脫低信譽節點
+                os.system("warp-cli --accept-tos disconnect 2>/dev/null; warp-cli --accept-tos registration new 2>/dev/null || warp-cli --accept-tos register 2>/dev/null; warp-cli --accept-tos connect 2>/dev/null; sleep 8 || true")
             time.sleep(5.0)
 
         raise RuntimeError(f"TPEX 雲端瀏覽器 Session 預熱失敗：{last_error}")
