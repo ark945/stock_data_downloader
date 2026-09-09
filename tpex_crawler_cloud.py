@@ -365,44 +365,59 @@ class TPEXCloudCrawler:
         """)
 
     def _launch_browser_session(self, port: Optional[int] = None):
+        import tempfile
         from DrissionPage import ChromiumPage, ChromiumOptions
 
         if "DISPLAY" not in os.environ and os.name != "nt":
             os.environ["DISPLAY"] = ":99"
 
-        co = ChromiumOptions()
-        if sys.platform.startswith("linux"):
-            for bin_p in ["/usr/bin/google-chrome", "/usr/bin/google-chrome-stable", "/usr/bin/chromium", "/usr/bin/chromium-browser"]:
-                if os.path.exists(bin_p):
-                    co.set_paths(browser_path=bin_p)
-                    break
-
-        co.set_argument("--lang=zh-TW")
-        co.set_argument("--no-sandbox")
-        co.set_argument("--disable-gpu")
-        co.set_argument("--disable-dev-shm-usage")
-        co.set_argument("--window-size=1920,1080")
-
         last_error = ""
         for launch_attempt in range(1, 4):
-            page = ChromiumPage(addr_or_opts=co)
-            page.listen.start(["afterTrading", "brokerBS"])
-            page.get(self.TPEX_URL, retry=3, timeout=30)
-            initial_token = self._wait_token(page, timeout=self.PAGE_READY_WAIT)
-            print(f"[*] TPEX 首頁 Session 預熱完成，初始 Token 長度: {len(initial_token)} (啟動嘗試 {launch_attempt}/3)")
-            if initial_token:
-                return page, None
+            co = ChromiumOptions()
+            if sys.platform.startswith("linux"):
+                for bin_p in ["/usr/bin/google-chrome", "/usr/bin/google-chrome-stable", "/usr/bin/chromium", "/usr/bin/chromium-browser"]:
+                    if os.path.exists(bin_p):
+                        co.set_paths(browser_path=bin_p)
+                        break
 
-            last_error = "首頁 Turnstile 初始 Token 未取得"
+            co.set_argument("--lang=zh-TW")
+            co.set_argument("--no-sandbox")
+            co.set_argument("--disable-gpu")
+            co.set_argument("--disable-dev-shm-usage")
+            co.set_argument("--window-size=1920,1080")
+
+            # 建立獨立暫存 profile 目錄，徹底隔絕 singleton lock 與殘留連線
+            temp_user_data = tempfile.mkdtemp(prefix=f"tpex_chrome_{launch_attempt}_")
+            co.set_user_data_path(temp_user_data)
+
+            page = None
             try:
-                page.quit()
+                page = ChromiumPage(addr_or_opts=co)
+                page.listen.start(["afterTrading", "brokerBS"])
+                page.get(self.TPEX_URL, retry=3, timeout=30)
+                initial_token = self._wait_token(page, timeout=self.PAGE_READY_WAIT)
+                print(f"[*] TPEX 首頁 Session 預熱完成，初始 Token 長度: {len(initial_token)} (啟動嘗試 {launch_attempt}/3)")
+                sys.stdout.flush()
+                if initial_token:
+                    return page, temp_user_data
+                last_error = "首頁 Turnstile 初始 Token 未取得"
+            except Exception as e:
+                last_error = f"瀏覽器啟動或導覽失敗: {e}"
+
+            try:
+                if page:
+                    page.quit()
             except Exception:
                 pass
             if sys.platform.startswith("linux"):
                 os.system("pkill -9 -f 'chrome|chromium' 2>/dev/null || true")
-                # 強制重新註冊獲取全新 WARP IP，徹底擺脫低信譽節點
-                os.system("warp-cli --accept-tos disconnect 2>/dev/null; warp-cli --accept-tos registration new 2>/dev/null || warp-cli --accept-tos register 2>/dev/null; warp-cli --accept-tos connect 2>/dev/null; sleep 8 || true")
-            time.sleep(5.0)
+            if os.path.exists(temp_user_data):
+                import shutil
+                try:
+                    shutil.rmtree(temp_user_data, ignore_errors=True)
+                except Exception:
+                    pass
+            time.sleep(3.0)
 
         raise RuntimeError(f"TPEX 雲端瀏覽器 Session 預熱失敗：{last_error}")
 
@@ -425,13 +440,20 @@ class TPEXCloudCrawler:
         processed_symbols = set()
 
         def _cleanup_browser(p, _u_data=None):
-            """清理瀏覽器行程，在 Linux 上額外 pkill 殭屍行程"""
-            try:
-                if p: p.quit()
-            except Exception:
-                pass
+            """安全清理瀏覽器行程與暫存檔，防止進程阻塞與 Profile 鎖死"""
             if sys.platform.startswith("linux"):
                 os.system("pkill -9 -f 'chrome|chromium' 2>/dev/null || true")
+            try:
+                if p:
+                    p.quit()
+            except Exception:
+                pass
+            if _u_data and os.path.exists(_u_data):
+                import shutil
+                try:
+                    shutil.rmtree(_u_data, ignore_errors=True)
+                except Exception:
+                    pass
 
         try:
             print(f"[*] 正在啟動 TPEX 雲端持久化引擎 (待抓取: {total} 檔)...")
@@ -448,23 +470,22 @@ class TPEXCloudCrawler:
                 success_crawl = False
                 last_failure_reason = "未取得有效回應"
                 try:
-                    # 每 75 檔主動冷卻並重啟 Chrome/WARP，避開長會話在 80 檔附近被 TPEX 保護性節流
-                    if idx > 1 and (idx - 1) % 75 == 0:
-                        print(f"[*] [預防性重啟] 已連續完成 {idx - 1} 檔，冷卻並重建 WARP/Chromium 會話...")
-                        _cleanup_browser(page, temp_user_data)
-                        if sys.platform.startswith("linux"):
-                            os.system("warp-cli --accept-tos disconnect 2>/dev/null; sleep 5; warp-cli --accept-tos connect 2>/dev/null; sleep 12 || true")
-                        time.sleep(10.0)
-                        page, temp_user_data = self._launch_browser_session()
+                    # 每 35 檔預防性刷新網頁 Session，確保 TPEX 前端狀態與 Turnstile 永遠處於鮮活狀態 (零斷網開銷)
+                    if idx > 1 and (idx - 1) % 35 == 0:
+                        print(f"[*] [預防性 Session 刷新] 已連續完成 {idx - 1} 檔，重新載入 TPEX 首頁維護會話活力...")
+                        sys.stdout.flush()
+                        page.get(self.TPEX_URL, retry=2, timeout=25)
+                        time.sleep(2.0)
+                        self._wait_token(page, timeout=self.PAGE_READY_WAIT)
 
-                    # 智慧自癒：若連續失敗達 3 次，輪換 WARP 出口 IP 並徹底重構全新瀏覽器會話
+                    # 智慧自癒：若連續失敗達 3 次，重建全新 Chromium 會話並重置計數 (避免中途斷網死鎖)
                     if consecutive_fails >= 3:
-                        print(f"[*] [即時自癒] 偵測到連續失敗 {consecutive_fails} 次，輪換 WARP 出口 IP 並重啟 Chromium 會話...")
+                        print(f"[*] [即時自癒] 偵測到連續失敗 {consecutive_fails} 次，重建全新 Chromium 會話...")
+                        sys.stdout.flush()
                         _cleanup_browser(page, temp_user_data)
-                        if sys.platform.startswith("linux"):
-                            os.system("warp-cli --accept-tos disconnect 2>/dev/null; sleep 2; warp-cli --accept-tos connect 2>/dev/null; sleep 6 || true")
                         time.sleep(3.0)
                         page, temp_user_data = self._launch_browser_session()
+                        consecutive_fails = 0
 
                     for attempt in range(1, 4):
                         try:
@@ -575,8 +596,17 @@ class TPEXCloudCrawler:
                                     stat_msg = body.get("stat") or body.get("message") or str(body)[:60]
                                     last_failure_reason = f"非預期回應: {stat_msg}"
                                     print(f"[{ts_res}]   [上櫃 {idx}/{total}] [非預期回應: {stat_msg}] {sym} (重試 {attempt}/3)")
+                                    sys.stdout.flush()
                                     self._clear_turnstile_token(page)
-                                    time.sleep(5.0 + attempt * 3.0)
+                                    # 關鍵修復：若收到「操作逾時」或提示「重新整理」，代表 TPEX 前端 Session 或 Turnstile 已過期，立即刷新頁面重建 Session！
+                                    if "操作逾時" in stat_msg or "重新整理" in stat_msg:
+                                        print(f"[*] [Session 逾時自癒] 偵測到 TPEX 會話過期，立即重新載入首頁刷新 Session...")
+                                        sys.stdout.flush()
+                                        page.get(self.TPEX_URL, retry=2, timeout=25)
+                                        time.sleep(2.5)
+                                        self._wait_token(page, timeout=self.PAGE_READY_WAIT)
+                                    else:
+                                        time.sleep(5.0 + attempt * 3.0)
                                     continue
 
                             if attempt < 3:
