@@ -111,14 +111,15 @@ class TWSEBrokerCrawler:
     def _get_latest_trade_date(self) -> str:
         today = get_taipei_now()
         w = today.weekday()
+        is_ready = (today.hour, today.minute) >= (16, 30)
         if w == 5:
             delta = 1
         elif w == 6:
             delta = 2
         elif w == 0:
-            delta = 0 if today.hour >= 17 else 3
+            delta = 0 if is_ready else 3
         else:
-            delta = 0 if today.hour >= 17 else 1
+            delta = 0 if is_ready else 1
         return (today - pd.Timedelta(days=delta)).strftime("%Y-%m-%d")
 
     def fetch_stock_raw_csv(self, stock_id: str) -> Optional[str]:
