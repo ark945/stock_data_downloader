@@ -131,7 +131,7 @@ jobs:
 
       - name: 安裝 Python 套件依賴 (僅需 requests / pandas / pyarrow)
         run: |
-          pip install requests pandas pyarrow google-api-python-client google-auth
+          pip install requests pandas pyarrow beautifulsoup4 google-api-python-client google-auth
 
       - name: 執行收盤價與輕量數據補齊爬蟲 (收盤價 + 融資券 + 期貨 + 集保)
         continue-on-error: true
@@ -319,6 +319,49 @@ jobs:
           echo "[!] TPEX probe failed after ${ATTEMPTS} attempts."
           exit 1
 
+      - name: 輸出 TPEX 探針摘要
+        if: always()
+        run: |
+          LOG_FILE=$(find . -type f \( -path "*/output/logs/crawler_tpex_shard_0.log" -o -path "*/logs/crawler_tpex_shard_0.log" \) | head -n 1)
+          {
+            echo "## TPEX Probe Summary"
+            echo
+            if [ -z "$LOG_FILE" ]; then
+              echo "- log file: not found"
+            else
+              SUMMARY_LINE=$(grep 'TPEX 上櫃採集完成：' "$LOG_FILE" | tail -n 1 || true)
+              ASSIGNED=$(echo "$SUMMARY_LINE" | sed -n 's/.*共分配 \([0-9]\+\) 檔.*/\1/p')
+              SUCCESS=$(echo "$SUMMARY_LINE" | sed -n 's/.*有效成交產出: \([0-9]\+\) 檔.*/\1/p')
+              NO_TRADE=$(echo "$SUMMARY_LINE" | sed -n 's/.*無成交\/略過: \([0-9]\+\) 檔.*/\1/p')
+              FAILED=$(echo "$SUMMARY_LINE" | sed -n 's/.*失敗: \([0-9]\+\) 檔.*/\1/p')
+              ROUNDS=$(grep -oE '第 [0-9]+/[0-9]+ 輪抓取啟動' "$LOG_FILE" | sed -E 's/.*第 ([0-9]+)\/.*/\1/' | sort -n | tail -n 1)
+              RETRIES=$(grep -c '重試 ' "$LOG_FILE" || true)
+              OP_TIMEOUTS=$(grep -c '操作逾時' "$LOG_FILE" || true)
+              TOKEN_TIMEOUTS=$(grep -c 'Token 逾時' "$LOG_FILE" || true)
+              ERR_520=$(grep -c '520' "$LOG_FILE" || true)
+              SELF_HEALS=$(grep -c '\[即時自癒\]' "$LOG_FILE" || true)
+              CIRCUIT_BREAKERS=$(grep -c '觸發安全熔斷中止本輪採集' "$LOG_FILE" || true)
+              PENDING_RETRIES=$(grep -c '採集失敗/已記錄待補抓' "$LOG_FILE" || true)
+
+              echo "- log file: $LOG_FILE"
+              echo
+              echo "| metric | value |"
+              echo "| --- | ---: |"
+              echo "| assigned | ${ASSIGNED:-0} |"
+              echo "| success | ${SUCCESS:-0} |"
+              echo "| no trade / skipped | ${NO_TRADE:-0} |"
+              echo "| failed | ${FAILED:-0} |"
+              echo "| rounds started | ${ROUNDS:-0} |"
+              echo "| retry lines | ${RETRIES:-0} |"
+              echo "| 操作逾時 | ${OP_TIMEOUTS:-0} |"
+              echo "| token timeout | ${TOKEN_TIMEOUTS:-0} |"
+              echo "| HTTP 520 | ${ERR_520:-0} |"
+              echo "| self heal | ${SELF_HEALS:-0} |"
+              echo "| circuit breaker | ${CIRCUIT_BREAKERS:-0} |"
+              echo "| pending retry marks | ${PENDING_RETRIES:-0} |"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: 上傳 TPEX 探針 Log
         if: always()
         uses: actions/upload-artifact@v4
@@ -330,14 +373,14 @@ jobs:
           retention-days: 1
 
   # -----------------------------------------------------------------
-  # TPEX 長跑金絲雀：probe 成功後，先完整跑 shard 0 (~125 檔)，成功才展開其餘 7 個 shard
+  # TPEX 迷你金絲雀：probe 成功後，先以 shard 0 的少量樣本驗證長會話穩定性，成功才展開正式 8-shard
   # -----------------------------------------------------------------
   tpex-canary:
-    name: TPEX-上櫃-完整分片金絲雀-0
+    name: TPEX-上櫃-迷你金絲雀
     needs: [pre-check, tpex-probe]
     if: ${{ needs.pre-check.outputs.should_skip != 'true' && needs.tpex-probe.result == 'success' && (github.event_name == 'schedule' || github.event.inputs.market == 'all' || github.event.inputs.market == 'tpex' || github.event.inputs.market == '') }}
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 30
 
     steps:
       - name: 檢出專案代碼 (Checkout)
@@ -381,14 +424,15 @@ jobs:
             pip install -r stock_data_downloader/requirements.txt
           fi
 
-      - name: 執行 TPEX 上櫃完整分片金絲雀 (Shard 0/8)
+      - name: 執行 TPEX 上櫃迷你金絲雀 (Shard 0 前 12 檔)
         env:
           DISPLAY: ":99"
           PYTHONIOENCODING: "utf-8"
           PYTHONUNBUFFERED: "1"
           TPEX_CI_ABORT_AFTER_CONSECUTIVE_FAILURES: "0"
-          TPEX_SHARD_ATTEMPTS: "2"
-          TPEX_SHARD_RETRY_COOLDOWN_SECONDS: "300"
+          TPEX_CANARY_ATTEMPTS: "2"
+          TPEX_CANARY_RETRY_COOLDOWN_SECONDS: "180"
+          TPEX_CANARY_LIMIT_SYMBOLS: "12"
           TARGET_DATE: ${{ github.event.inputs.target_date || needs.pre-check.outputs.target_date }}
         run: |
           if [ -f "stock_crawler_coordinator.py" ]; then
@@ -397,25 +441,26 @@ jobs:
             TARGET_SCRIPT="stock_data_downloader/stock_crawler_coordinator.py"
           fi
 
-          ATTEMPTS="${TPEX_SHARD_ATTEMPTS:-2}"
-          COOLDOWN="${TPEX_SHARD_RETRY_COOLDOWN_SECONDS:-300}"
+          ATTEMPTS="${TPEX_CANARY_ATTEMPTS:-2}"
+          COOLDOWN="${TPEX_CANARY_RETRY_COOLDOWN_SECONDS:-180}"
+          LIMIT_SYMBOLS="${TPEX_CANARY_LIMIT_SYMBOLS:-12}"
           set +e
           for attempt in $(seq 1 "$ATTEMPTS"); do
-            echo "[*] TPEX canary shard attempt ${attempt}/${ATTEMPTS}"
+            echo "[*] TPEX mini-canary attempt ${attempt}/${ATTEMPTS}"
             if [ -n "$TARGET_DATE" ]; then
-              python "$TARGET_SCRIPT" --market tpex --date "$TARGET_DATE" --workers 1 --max-rounds 3 --shard-id 0 --num-shards 8 --no-excel
+              python "$TARGET_SCRIPT" --market tpex --date "$TARGET_DATE" --workers 1 --max-rounds 1 --shard-id 0 --num-shards 8 --limit-symbols "$LIMIT_SYMBOLS" --no-excel
             else
-              python "$TARGET_SCRIPT" --market tpex --workers 1 --max-rounds 3 --shard-id 0 --num-shards 8 --no-excel
+              python "$TARGET_SCRIPT" --market tpex --workers 1 --max-rounds 1 --shard-id 0 --num-shards 8 --limit-symbols "$LIMIT_SYMBOLS" --no-excel
             fi
             rc=$?
             if [ "$rc" -eq 0 ]; then
-              echo "[✓] TPEX canary shard attempt ${attempt}/${ATTEMPTS} passed."
+              echo "[✓] TPEX mini-canary attempt ${attempt}/${ATTEMPTS} passed."
               exit 0
             fi
 
-            echo "[!] TPEX canary shard attempt ${attempt}/${ATTEMPTS} failed with exit code ${rc}."
+            echo "[!] TPEX mini-canary attempt ${attempt}/${ATTEMPTS} failed with exit code ${rc}."
             if [ "$attempt" -lt "$ATTEMPTS" ]; then
-              echo "[*] Cooling down ${COOLDOWN}s and rotating WARP/Chromium before retrying canary shard..."
+              echo "[*] Cooling down ${COOLDOWN}s and rotating WARP/Chromium before retrying mini-canary..."
               rm -rf output/*.parquet output/logs/crawler_tpex_shard_0.log logs/crawler_tpex_shard_0.log downloads_tpex_cloud || true
               pkill -9 -f 'chrome|chromium' 2>/dev/null || true
               warp-cli --accept-tos disconnect 2>/dev/null || true
@@ -426,22 +471,64 @@ jobs:
             fi
           done
 
-          echo "[!] TPEX canary shard failed after ${ATTEMPTS} attempts."
+          echo "[!] TPEX mini-canary failed after ${ATTEMPTS} attempts."
           exit 1
 
-      - name: 上傳 TPEX 金絲雀分片產物 (Parquet 與 Log)
+      - name: 輸出 TPEX 迷你金絲雀摘要
+        if: always()
+        run: |
+          LOG_FILE=$(find . -type f \( -path "*/output/logs/crawler_tpex_shard_0.log" -o -path "*/logs/crawler_tpex_shard_0.log" \) | head -n 1)
+          {
+            echo "## TPEX Mini-Canary Summary"
+            echo
+            if [ -z "$LOG_FILE" ]; then
+              echo "- log file: not found"
+            else
+              SUMMARY_LINE=$(grep 'TPEX 上櫃採集完成：' "$LOG_FILE" | tail -n 1 || true)
+              ASSIGNED=$(echo "$SUMMARY_LINE" | sed -n 's/.*共分配 \([0-9]\+\) 檔.*/\1/p')
+              SUCCESS=$(echo "$SUMMARY_LINE" | sed -n 's/.*有效成交產出: \([0-9]\+\) 檔.*/\1/p')
+              NO_TRADE=$(echo "$SUMMARY_LINE" | sed -n 's/.*無成交\/略過: \([0-9]\+\) 檔.*/\1/p')
+              FAILED=$(echo "$SUMMARY_LINE" | sed -n 's/.*失敗: \([0-9]\+\) 檔.*/\1/p')
+              ROUNDS=$(grep -oE '第 [0-9]+/[0-9]+ 輪抓取啟動' "$LOG_FILE" | sed -E 's/.*第 ([0-9]+)\/.*/\1/' | sort -n | tail -n 1)
+              RETRIES=$(grep -c '重試 ' "$LOG_FILE" || true)
+              OP_TIMEOUTS=$(grep -c '操作逾時' "$LOG_FILE" || true)
+              TOKEN_TIMEOUTS=$(grep -c 'Token 逾時' "$LOG_FILE" || true)
+              ERR_520=$(grep -c '520' "$LOG_FILE" || true)
+              SELF_HEALS=$(grep -c '\[即時自癒\]' "$LOG_FILE" || true)
+              CIRCUIT_BREAKERS=$(grep -c '觸發安全熔斷中止本輪採集' "$LOG_FILE" || true)
+              PENDING_RETRIES=$(grep -c '採集失敗/已記錄待補抓' "$LOG_FILE" || true)
+
+              echo "- log file: $LOG_FILE"
+              echo
+              echo "| metric | value |"
+              echo "| --- | ---: |"
+              echo "| assigned | ${ASSIGNED:-0} |"
+              echo "| success | ${SUCCESS:-0} |"
+              echo "| no trade / skipped | ${NO_TRADE:-0} |"
+              echo "| failed | ${FAILED:-0} |"
+              echo "| rounds started | ${ROUNDS:-0} |"
+              echo "| retry lines | ${RETRIES:-0} |"
+              echo "| 操作逾時 | ${OP_TIMEOUTS:-0} |"
+              echo "| token timeout | ${TOKEN_TIMEOUTS:-0} |"
+              echo "| HTTP 520 | ${ERR_520:-0} |"
+              echo "| self heal | ${SELF_HEALS:-0} |"
+              echo "| circuit breaker | ${CIRCUIT_BREAKERS:-0} |"
+              echo "| pending retry marks | ${PENDING_RETRIES:-0} |"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 上傳 TPEX 迷你金絲雀 Log
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: tpex-shard-0
+          name: tpex-mini-canary-log
           path: |
-            **/output/*_tpex_shard_0.parquet
             **/output/logs/crawler_tpex_shard_0.log
             **/logs/crawler_tpex_shard_0.log
           retention-days: 1
 
   # -----------------------------------------------------------------
-  # TPEX 上櫃：canary 成功後依序執行剩餘 shard；避免多 Runner 同時觸發 TPEX 後端保護性逾時
+  # TPEX 上櫃：mini-canary 成功後展開正式 8 shard，先以 2 路受控並行驗證可承受併發上限
   # -----------------------------------------------------------------
   tpex-shards:
     name: TPEX-上櫃-分片-${{ matrix.shard }}
@@ -451,9 +538,9 @@ jobs:
     timeout-minutes: 60
     strategy:
       fail-fast: false
-      max-parallel: 1
+      max-parallel: 2
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7]
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
 
     steps:
       - name: 檢出專案代碼 (Checkout)
@@ -514,7 +601,7 @@ jobs:
             TARGET_SCRIPT="stock_data_downloader/stock_crawler_coordinator.py"
           fi
 
-          # 8 分片錯峰啟動 (每分片錯開 15s) 避免同時撞擊 TPEX 首頁與 Session 握手
+          # 8 分片錯峰啟動 (每分片錯開 15s)；在 2 路並行下維持溫和節奏，避免同時撞擊 TPEX 首頁與 Session 握手
           sleep $(( ${{ matrix.shard }} * 15 ))
 
           ATTEMPTS="${TPEX_SHARD_ATTEMPTS:-2}"
@@ -548,6 +635,49 @@ jobs:
 
           echo "[!] TPEX shard ${{ matrix.shard }} failed after ${ATTEMPTS} attempts."
           exit 1
+
+      - name: 輸出 TPEX 分片摘要
+        if: always()
+        run: |
+          LOG_FILE=$(find . -type f \( -path "*/output/logs/crawler_tpex_shard_${{ matrix.shard }}.log" -o -path "*/logs/crawler_tpex_shard_${{ matrix.shard }}.log" \) | head -n 1)
+          {
+            echo "## TPEX Shard ${{ matrix.shard }} Summary"
+            echo
+            if [ -z "$LOG_FILE" ]; then
+              echo "- log file: not found"
+            else
+              SUMMARY_LINE=$(grep 'TPEX 上櫃採集完成：' "$LOG_FILE" | tail -n 1 || true)
+              ASSIGNED=$(echo "$SUMMARY_LINE" | sed -n 's/.*共分配 \([0-9]\+\) 檔.*/\1/p')
+              SUCCESS=$(echo "$SUMMARY_LINE" | sed -n 's/.*有效成交產出: \([0-9]\+\) 檔.*/\1/p')
+              NO_TRADE=$(echo "$SUMMARY_LINE" | sed -n 's/.*無成交\/略過: \([0-9]\+\) 檔.*/\1/p')
+              FAILED=$(echo "$SUMMARY_LINE" | sed -n 's/.*失敗: \([0-9]\+\) 檔.*/\1/p')
+              ROUNDS=$(grep -oE '第 [0-9]+/[0-9]+ 輪抓取啟動' "$LOG_FILE" | sed -E 's/.*第 ([0-9]+)\/.*/\1/' | sort -n | tail -n 1)
+              RETRIES=$(grep -c '重試 ' "$LOG_FILE" || true)
+              OP_TIMEOUTS=$(grep -c '操作逾時' "$LOG_FILE" || true)
+              TOKEN_TIMEOUTS=$(grep -c 'Token 逾時' "$LOG_FILE" || true)
+              ERR_520=$(grep -c '520' "$LOG_FILE" || true)
+              SELF_HEALS=$(grep -c '\[即時自癒\]' "$LOG_FILE" || true)
+              CIRCUIT_BREAKERS=$(grep -c '觸發安全熔斷中止本輪採集' "$LOG_FILE" || true)
+              PENDING_RETRIES=$(grep -c '採集失敗/已記錄待補抓' "$LOG_FILE" || true)
+
+              echo "- log file: $LOG_FILE"
+              echo
+              echo "| metric | value |"
+              echo "| --- | ---: |"
+              echo "| assigned | ${ASSIGNED:-0} |"
+              echo "| success | ${SUCCESS:-0} |"
+              echo "| no trade / skipped | ${NO_TRADE:-0} |"
+              echo "| failed | ${FAILED:-0} |"
+              echo "| rounds started | ${ROUNDS:-0} |"
+              echo "| retry lines | ${RETRIES:-0} |"
+              echo "| 操作逾時 | ${OP_TIMEOUTS:-0} |"
+              echo "| token timeout | ${TOKEN_TIMEOUTS:-0} |"
+              echo "| HTTP 520 | ${ERR_520:-0} |"
+              echo "| self heal | ${SELF_HEALS:-0} |"
+              echo "| circuit breaker | ${CIRCUIT_BREAKERS:-0} |"
+              echo "| pending retry marks | ${PENDING_RETRIES:-0} |"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: 上傳 TPEX 分片產物 (Parquet 與 Log)
         if: always()

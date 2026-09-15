@@ -26,21 +26,26 @@ def test_daily_workflow_uses_current_sharding() -> None:
     assert "TPEX 8-Runner" in text
     assert "tpex-probe:" in text
     assert "tpex-canary:" in text
+    assert "TPEX-上櫃-迷你金絲雀" in text
     assert "--limit-symbols 5" in text
+    assert "TPEX_CANARY_LIMIT_SYMBOLS" in text
     assert "TPEX_PROBE_ATTEMPTS" in text
     assert "TPEX_PROBE_RETRY_COOLDOWN_SECONDS" in text
+    assert "TPEX_CANARY_ATTEMPTS" in text
+    assert "TPEX_CANARY_RETRY_COOLDOWN_SECONDS" in text
     assert "TPEX_SHARD_ATTEMPTS" in text
     assert "TPEX_SHARD_RETRY_COOLDOWN_SECONDS" in text
     assert "needs.tpex-probe.result == 'success'" in text
     assert "needs.tpex-canary.result == 'success'" in text
     assert "requirements_tpex_cloud.txt" in text
-    assert "shard: [1, 2, 3, 4, 5, 6, 7]" in text
-    assert "max-parallel: 1" in text
-    assert "name: tpex-shard-0" in text
+    assert "shard: [0, 1, 2, 3, 4, 5, 6, 7]" in text
+    assert "max-parallel: 2" in text
+    assert "name: tpex-mini-canary-log" in text
     assert "--num-shards 8" in text
     assert "TPEX_CI_ABORT_AFTER_CONSECUTIVE_FAILURES" in text
     assert "--max-rounds 1" in text
     assert "--max-rounds 3" in text
+    assert "--limit-symbols \"$LIMIT_SYMBOLS\"" in text
     assert "needs.tpex-shards.result == 'success'" in text
     assert "TPEX 20-Runner" not in text
     assert "--num-shards 20" not in text
