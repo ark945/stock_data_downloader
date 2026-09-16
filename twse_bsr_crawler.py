@@ -281,14 +281,19 @@ class TWSEBrokerCrawler:
 
         return res_df
 
-    def _crawl_single_worker(self, sym: str, trade_date: str) -> Tuple[str, Optional[pd.DataFrame]]:
+    def _crawl_single_worker(self, sym: str, trade_date: str) -> Tuple[str, Optional[pd.DataFrame], str]:
         if self.delay_sec > 0:
             time.sleep(self.delay_sec)
         csv_text = self.fetch_stock_raw_csv(sym)
-        if csv_text:
-            df = self.parse_csv_to_dataframe(csv_text, sym, trade_date)
-            return (sym, df)
-        return (sym, None)
+        if csv_text == "":
+            return (sym, None, "no_trade")
+        if csv_text is None:
+            return (sym, None, "failed")
+
+        df = self.parse_csv_to_dataframe(csv_text, sym, trade_date)
+        if df is not None and not df.empty:
+            return (sym, df, "success")
+        return (sym, None, "failed")
 
     def crawl_stocks(
         self,
@@ -296,10 +301,10 @@ class TWSEBrokerCrawler:
         trade_date: str = "",
         max_workers: int = 4,
         max_retry_rounds: int = 6
-    ) -> Tuple[List[pd.DataFrame], List[str], int]:
+    ) -> Tuple[List[pd.DataFrame], List[str], int, List[str]]:
         """
         批次抓取指定上市股票清單 (支援最多 6 輪自適應安全補抓機制)
-        :return: (all_dfs, final_failed_symbols, total_rounds_executed)
+        :return: (all_dfs, final_failed_symbols, total_rounds_executed, no_trade_symbols)
         """
         if not trade_date:
             trade_date = self._get_latest_trade_date()
@@ -316,6 +321,7 @@ class TWSEBrokerCrawler:
 
         all_dfs = []
         failed_symbols = []
+        no_trade_symbols = []
         completed_count = 0
         total_rows = 0
         start_time = time.time()
@@ -329,11 +335,13 @@ class TWSEBrokerCrawler:
 
             for future in as_completed(future_to_sym):
                 completed_count += 1
-                sym, df = future.result()
+                sym, df, status = future.result()
 
-                if df is not None and not df.empty:
+                if status == "success" and df is not None and not df.empty:
                     all_dfs.append(df)
                     total_rows += len(df)
+                elif status == "no_trade":
+                    no_trade_symbols.append(sym)
                 else:
                     failed_symbols.append(sym)
 
@@ -343,11 +351,12 @@ class TWSEBrokerCrawler:
                     remaining = (total_symbols - completed_count) / speed if speed > 0 else 0
                     pct = (completed_count / total_symbols) * 100
                     success_cnt = len(all_dfs)
-                    miss_cnt = len(failed_symbols)
+                    no_trade_cnt = len(no_trade_symbols)
+                    retry_cnt = len(failed_symbols)
                     ts_now = get_taipei_now().strftime("%H:%M:%S")
                     print(
                         f"[{ts_now}] [第1輪 進度 {completed_count}/{total_symbols} ({pct:.1f}%)] "
-                        f"成功: {success_cnt} 檔 | 無交易/待補: {miss_cnt} 檔 | "
+                        f"成功: {success_cnt} 檔 | 無交易: {no_trade_cnt} 檔 | 待補: {retry_cnt} 檔 | "
                         f"累積: {total_rows:,} 筆 | 速度: {speed:.1f} 檔/s | "
                         f"剩餘約: {remaining/60:.1f} 分鐘"
                     )
@@ -396,29 +405,41 @@ class TWSEBrokerCrawler:
 
                 for fut in as_completed(future_map):
                     retry_done_cnt += 1
-                    sym, df = fut.result()
+                    sym, df, status = fut.result()
                     sym_name = name_map.get(sym, "")
                     name_str = f"({sym_name})" if sym_name else ""
                     ts_item = datetime.now().strftime("%H:%M:%S")
 
-                    if df is not None and not df.empty:
+                    if status == "success" and df is not None and not df.empty:
                         all_dfs.append(df)
                         total_rows += len(df)
                         retry_success += 1
                         print(f"[{ts_item}]   [第{rounds_executed}輪 {retry_done_cnt}/{retry_count}] [OK] {sym} {name_str} -> 成功補回 {len(df)} 筆！")
+                    elif status == "no_trade":
+                        no_trade_symbols.append(sym)
+                        print(f"[{ts_item}]   [第{rounds_executed}輪 {retry_done_cnt}/{retry_count}] [無交易] {sym} {name_str} (TWSE 回覆查無符合資料)")
                     else:
                         still_failed.append(sym)
-                        print(f"[{ts_item}]   [第{rounds_executed}輪 {retry_done_cnt}/{retry_count}] [無交易/略過] {sym} {name_str}")
+                        print(f"[{ts_item}]   [第{rounds_executed}輪 {retry_done_cnt}/{retry_count}] [待下輪補抓] {sym} {name_str} (技術性失敗)")
                     sys.stdout.flush()
 
             ts_done = datetime.now().strftime("%H:%M:%S")
-            print(f"[{ts_done}] [+] 第 {rounds_executed} 輪補抓完成！成功救回 {retry_success}/{retry_count} 檔 (剩餘未成功: {len(still_failed)} 檔)")
+            print(
+                f"[{ts_done}] [+] 第 {rounds_executed} 輪補抓完成！成功救回 {retry_success}/{retry_count} 檔 "
+                f"(剩餘待補: {len(still_failed)} 檔, 已確認無交易: {len(no_trade_symbols)} 檔)"
+            )
             failed_symbols = still_failed
 
         ts_all_done = datetime.now().strftime("%H:%M:%S")
         if not failed_symbols:
-            print(f"\n[{ts_all_done}] [+] 全市場標的 100% 抓取達成！(共執行 {rounds_executed} 輪)")
+            print(
+                f"\n[{ts_all_done}] [+] 全市場標的抓取完成！(共執行 {rounds_executed} 輪) "
+                f"| 成功: {len(all_dfs)} 檔 | 無交易: {len(no_trade_symbols)} 檔"
+            )
         else:
-            print(f"\n[{ts_all_done}] [!] 達到最大補抓輪數 ({max_retry_rounds} 輪)，剩餘未產出標的: {len(failed_symbols)} 檔")
+            print(
+                f"\n[{ts_all_done}] [!] 達到最大補抓輪數 ({max_retry_rounds} 輪)，剩餘技術性失敗: {len(failed_symbols)} 檔 "
+                f"| 已確認無交易: {len(no_trade_symbols)} 檔"
+            )
 
-        return all_dfs, failed_symbols, rounds_executed
+        return all_dfs, failed_symbols, rounds_executed, no_trade_symbols

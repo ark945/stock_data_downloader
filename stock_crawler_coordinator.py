@@ -123,6 +123,7 @@ def run_full_market_crawler(
     collected_dfs = []
     total_target_count = 0
     all_failed_items = []
+    no_trade_count = 0
     rounds_executed = 1
 
     # 1. 抓取上市 (TWSE)
@@ -135,13 +136,14 @@ def run_full_market_crawler(
         log_msg(f"[*] 取得上市標的清單: {len(twse_symbols)} 檔 (分片 {shard_id + 1}/{num_shards})")
         
         twse_crawler = TWSEBrokerCrawler(delay_sec=0.4, max_retries=6)
-        twse_dfs, twse_failed, r_exec = twse_crawler.crawl_stocks(
+        twse_dfs, twse_failed, r_exec, twse_no_trade = twse_crawler.crawl_stocks(
             symbols=twse_symbols,
             trade_date=trade_date,
             max_workers=workers,
             max_retry_rounds=max_rounds
         )
         collected_dfs.extend(twse_dfs)
+        no_trade_count += len(twse_no_trade)
         rounds_executed = max(rounds_executed, r_exec)
         
         for sym in twse_failed:
@@ -151,7 +153,7 @@ def run_full_market_crawler(
                 "market": "TWSE",
                 "reason": f"達第 {r_exec} 輪重試上限"
             })
-        log_msg(f"[✓] TWSE 上市抓取完成：成功 {len(twse_dfs)} 檔，未產出 {len(twse_failed)} 檔")
+        log_msg(f"[✓] TWSE 上市抓取完成：成功 {len(twse_dfs)} 檔，確認無交易 {len(twse_no_trade)} 檔，技術性失敗 {len(twse_failed)} 檔")
 
     # 2. 抓取上櫃 (TPEX)
     if markets in ["all", "tpex"]:
@@ -225,7 +227,10 @@ def run_full_market_crawler(
     log_msg(f"[*] 啟動時間: {start_str}")
     log_msg(f"[*] 結束時間: {end_str}")
     log_msg(f"[*] 總計耗時: {duration_str} (共 {elapsed_total:.1f} 秒)")
-    log_msg(f"[+] 標的採集率: {unique_symbols}/{total_target_count} ({unique_symbols/total_target_count*100:.1f}%)")
+    covered_count = unique_symbols + no_trade_count
+    covered_rate = (covered_count / total_target_count * 100) if total_target_count > 0 else 0
+    log_msg(f"[+] 成功/無交易/失敗: {unique_symbols}/{no_trade_count}/{len(all_failed_items)} 檔")
+    log_msg(f"[+] 標的覆蓋率 (成功+無交易): {covered_count}/{total_target_count} ({covered_rate:.1f}%)")
     print("==================================================")
 
     # 4. 發送通知 (若為雲端分片模式則由最後聚合步驟統一推播，避免分片節點日誌混淆)
@@ -241,7 +246,7 @@ def run_full_market_crawler(
         trade_date=trade_date,
         total_target=total_target_count,
         success_count=unique_symbols,
-        no_trade_count=0,
+        no_trade_count=no_trade_count,
         failed_stocks=all_failed_items,
         total_rows=total_rows,
         elapsed_seconds=elapsed_total,
@@ -256,7 +261,7 @@ def run_full_market_crawler(
         trade_date=trade_date,
         total_target=total_target_count,
         success_count=unique_symbols,
-        no_trade_count=0,
+        no_trade_count=no_trade_count,
         failed_stocks=all_failed_items,
         total_rows=total_rows,
         elapsed_seconds=elapsed_total,
