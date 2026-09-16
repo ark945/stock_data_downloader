@@ -3,6 +3,7 @@ import sys
 import glob
 import time
 import shutil
+import signal
 import subprocess
 from datetime import datetime
 
@@ -11,6 +12,41 @@ os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
 
 ENV_PATH = os.path.join(os.path.dirname(__file__), ".env")
+
+
+def run_subprocess_interruptibly(args: list[str]) -> int:
+    creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
+    proc = subprocess.Popen(args, creationflags=creationflags)
+    try:
+        while True:
+            rc = proc.poll()
+            if rc is not None:
+                return rc
+            time.sleep(0.2)
+    except KeyboardInterrupt:
+        print("\n[!] 偵測到 Ctrl+C，正在通知子程序中止...")
+        try:
+            if os.name == "nt":
+                proc.send_signal(signal.CTRL_BREAK_EVENT)
+            else:
+                proc.terminate()
+        except Exception:
+            pass
+
+        deadline = time.time() + 5
+        while time.time() < deadline:
+            rc = proc.poll()
+            if rc is not None:
+                print("[✓] 子程序已收到中止訊號並結束。")
+                return rc
+            time.sleep(0.2)
+
+        print("[!] 子程序未於 5 秒內結束，改用強制終止。")
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        raise
 
 
 def clear_screen():
@@ -331,16 +367,16 @@ def run_quick_test():
     choice = input("\n請輸入選項 (0-4) > ").strip()
     if choice == "1":
         print("\n[*] 正在執行 Google Drive 同步測試...")
-        subprocess.run([sys.executable, "test_gdrive.py"])
+        run_subprocess_interruptibly([sys.executable, "test_gdrive.py"])
     elif choice == "2":
         print("\n[*] 正在執行通知推播測試...")
-        subprocess.run([sys.executable, "test_notify.py"])
+        run_subprocess_interruptibly([sys.executable, "test_notify.py"])
     elif choice == "3":
         print("\n[*] 正在測試上市 (TWSE) 2330 採集...")
-        subprocess.run([sys.executable, "-c", "from twse_bsr_crawler import TWSEBrokerCrawler; c = TWSEBrokerCrawler(); df, f, r = c.crawl_stocks(['2330'], '2026-08-21'); print('抓取結果:', len(df), '筆')"])
+        run_subprocess_interruptibly([sys.executable, "-c", "from twse_bsr_crawler import TWSEBrokerCrawler; c = TWSEBrokerCrawler(); df, f, r = c.crawl_stocks(['2330'], '2026-08-21'); print('抓取結果:', len(df), '筆')"])
     elif choice == "4":
         print("\n[*] 正在測試上櫃 (TPEX) 6488 採集...")
-        subprocess.run([sys.executable, "-c", "from tpex_bsr_crawler import TPEXBrokerCrawler; c = TPEXBrokerCrawler(); df, f = c.crawl_stocks_with_retry(['6488'], '2026-08-21'); print('抓取結果:', len(df), '筆')"])
+        run_subprocess_interruptibly([sys.executable, "-c", "from tpex_bsr_crawler import TPEXBrokerCrawler; c = TPEXBrokerCrawler(); df, f = c.crawl_stocks_with_retry(['6488'], '2026-08-21'); print('抓取結果:', len(df), '筆')"])
 
 
 def get_workers_selection() -> tuple[int, int]:
@@ -388,7 +424,7 @@ def run_crawler_menu():
         twse_w, tpex_w = get_workers_selection()
 
         if c == "1":
-            subprocess.run([
+            run_subprocess_interruptibly([
                 sys.executable, "stock_crawler_coordinator.py",
                 "--market", "all",
                 "--twse-workers", str(twse_w),
@@ -396,7 +432,7 @@ def run_crawler_menu():
                 "--max-rounds", "10"
             ])
         elif c == "2":
-            subprocess.run([
+            run_subprocess_interruptibly([
                 sys.executable, "stock_crawler_coordinator.py",
                 "--market", "all",
                 "--twse-workers", str(twse_w),
@@ -405,14 +441,14 @@ def run_crawler_menu():
                 "--no-excel"
             ])
         elif c == "3":
-            subprocess.run([
+            run_subprocess_interruptibly([
                 sys.executable, "stock_crawler_coordinator.py",
                 "--market", "twse",
                 "--twse-workers", str(twse_w),
                 "--max-rounds", "10"
             ])
         elif c == "4":
-            subprocess.run([
+            run_subprocess_interruptibly([
                 sys.executable, "stock_crawler_coordinator.py",
                 "--market", "tpex",
                 "--tpex-workers", str(tpex_w),
@@ -421,7 +457,7 @@ def run_crawler_menu():
         elif c == "5":
             date_str = input("\n請輸入指定日期 (YYYY-MM-DD) > ").strip()
             if date_str:
-                subprocess.run([
+                run_subprocess_interruptibly([
                     sys.executable, "stock_crawler_coordinator.py",
                     "--date", date_str,
                     "--market", "all",
@@ -513,4 +549,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\n[!] 已收到 Ctrl+C，設定精靈結束。")

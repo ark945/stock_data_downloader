@@ -161,7 +161,7 @@ jobs:
           retention-days: 7
 
   # -----------------------------------------------------------------
-  # TWSE 上市：6 個獨立 shard；不做瀏覽器不受 CF 影響
+  # TWSE 上市：6 個獨立 shard；每個 shard 固定 1 worker，降低站方風控壓力
   # -----------------------------------------------------------------
   twse-shards:
     name: TWSE-上市-分片-${{ matrix.shard }}
@@ -205,9 +205,9 @@ jobs:
           fi
 
           if [ -n "$TARGET_DATE" ]; then
-            python "$TARGET_SCRIPT" --market twse --date "$TARGET_DATE" --workers 4 --max-rounds 10 --shard-id ${{ matrix.shard }} --num-shards 6 --no-excel
+            python "$TARGET_SCRIPT" --market twse --date "$TARGET_DATE" --workers 1 --max-rounds 10 --shard-id ${{ matrix.shard }} --num-shards 6 --no-excel
           else
-            python "$TARGET_SCRIPT" --market twse --workers 4 --max-rounds 10 --shard-id ${{ matrix.shard }} --num-shards 6 --no-excel
+            python "$TARGET_SCRIPT" --market twse --workers 1 --max-rounds 10 --shard-id ${{ matrix.shard }} --num-shards 6 --no-excel
           fi
 
       - name: 上傳 TWSE 分片產物 (Parquet 與 Log)

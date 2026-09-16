@@ -84,6 +84,13 @@ def log_msg(msg: str):
     sys.stdout.flush()
 
 
+def format_reason_counts(reason_counts: Dict[str, int], top_n: int = 3) -> str:
+    if not reason_counts:
+        return "無"
+    ranked = sorted(reason_counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    return ", ".join(f"{reason}={count}" for reason, count in ranked[:top_n])
+
+
 def format_duration(seconds: float) -> str:
     """將秒數格式化為 幾時幾分幾秒"""
     s = int(seconds)
@@ -197,17 +204,31 @@ def run_full_market_crawler(
         )
         collected_dfs.extend(twse_dfs)
         rounds_executed = max(rounds_executed, r_exec)
-        
+        twse_stats = getattr(twse_crawler, "last_run_stats", {}) or {}
+        twse_reason_counts = twse_stats.get("reason_counts", {})
+        twse_technical_reason_counts = {
+            reason: count
+            for reason, count in twse_reason_counts.items()
+            if reason not in {"csv_download_ok", "no_data_reported"}
+        }
+        twse_symbol_failure_reasons = twse_stats.get("technical_failure_reason_by_symbol", {})
+
         for sym in twse_failed:
+            reason_text = twse_symbol_failure_reasons.get(sym) or f"達第 {r_exec} 輪重試上限"
             all_failed_items.append({
                 "symbol": sym,
                 "name": name_map.get(sym, "未知"),
                 "market": "TWSE",
-                "reason": f"達第 {r_exec} 輪重試上限"
+                "reason": reason_text
             })
         twse_total_assigned = len(twse_symbols)
-        twse_zero_vol = twse_total_assigned - len(twse_dfs) - len(twse_failed)
-        log_msg(f"[✓] TWSE 上市採集完成：共分配 {twse_total_assigned} 檔 | 有效成交產出: {len(twse_dfs)} 檔 | 無成交/略過: {twse_zero_vol} 檔 | 失敗: {len(twse_failed)} 檔")
+        twse_zero_vol = int(twse_stats.get("no_data_count", twse_total_assigned - len(twse_dfs) - len(twse_failed)))
+        twse_technical_failed = int(twse_stats.get("technical_failure_count", len(twse_failed)))
+        log_msg(
+            f"[✓] TWSE 上市採集完成：共分配 {twse_total_assigned} 檔 | 有效成交產出: {len(twse_dfs)} 檔 | "
+            f"明確無資料: {twse_zero_vol} 檔 | 技術失敗: {twse_technical_failed} 檔"
+        )
+        log_msg(f"[*] TWSE 技術失敗主因 Top 3: {format_reason_counts(twse_technical_reason_counts)}")
 
     # 2. 抓取上櫃 (TPEX)
     if markets in ["all", "tpex"]:
@@ -439,6 +460,9 @@ def main():
             with_close_price=args.with_close_price,
             limit_symbols=args.limit_symbols
         )
+    except KeyboardInterrupt:
+        log_msg("[!] 偵測到 Ctrl+C，協調器正在中止目前作業...")
+        raise SystemExit(130)
     finally:
         sys.stdout = orig_stdout
         sys.stderr = orig_stderr
