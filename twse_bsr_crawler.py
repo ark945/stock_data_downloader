@@ -299,10 +299,10 @@ class TWSEBrokerCrawler:
         symbols: List[str],
         trade_date: str = "",
         max_workers: int = 4,
-        max_retry_rounds: int = 7
+        max_retry_rounds: int = 10
     ) -> Tuple[List[pd.DataFrame], List[str], int]:
         """
-        批次抓取指定上市股票清單 (支援最多 7 輪自適應安全防護與終極收斂補抓機制)
+        批次抓取指定上市股票清單 (支援多輪自適應安全防護與最終收斂補抓機制)
         :return: (all_dfs, final_failed_symbols, total_rounds_executed)
         """
         if not trade_date:
@@ -310,11 +310,11 @@ class TWSEBrokerCrawler:
 
         total_symbols = len(symbols)
         print(f"==================================================")
-        print(f"[*] TWSE 上市券商買賣日報表爬蟲 (7 輪終極自適應安全防護版)")
+        print(f"[*] TWSE 上市券商買賣日報表爬蟲 ({max_retry_rounds} 輪終極自適應安全防護版)")
         print(f"[*] 目標交易日期: {trade_date}")
         print(f"[*] 待抓取標的數: {total_symbols} 檔")
         print(f"[*] 並行執行緒數: {max_workers} Workers (第 1 輪)")
-        print(f"[*] 最大補抓輪數: {max_retry_rounds} 輪 (含第 7 輪深度收斂跑到完機制)")
+        print(f"[*] 最大補抓輪數: {max_retry_rounds} 輪 (含第 {max_retry_rounds} 輪深度收斂跑到完機制)")
         print(f"==================================================")
         sys.stdout.flush()
 
@@ -359,7 +359,7 @@ class TWSEBrokerCrawler:
 
         rounds_executed = 1
 
-        # 第 2 ~ 7 輪階梯式自適應安全補抓 (第 7 輪為終極深層收斂輪)
+        # 第 2 輪起階梯式自適應安全補抓，最後一輪為終極深層收斂輪
         delay_schedule = [1.2, 1.8, 2.5, 3.2, 4.0, 4.8]  # 各輪安全延遲秒數
         
         while failed_symbols and rounds_executed < max_retry_rounds:

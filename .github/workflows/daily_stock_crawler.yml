@@ -205,9 +205,9 @@ jobs:
           fi
 
           if [ -n "$TARGET_DATE" ]; then
-            python "$TARGET_SCRIPT" --market twse --date "$TARGET_DATE" --workers 4 --max-rounds 6 --shard-id ${{ matrix.shard }} --num-shards 6 --no-excel
+            python "$TARGET_SCRIPT" --market twse --date "$TARGET_DATE" --workers 4 --max-rounds 10 --shard-id ${{ matrix.shard }} --num-shards 6 --no-excel
           else
-            python "$TARGET_SCRIPT" --market twse --workers 4 --max-rounds 6 --shard-id ${{ matrix.shard }} --num-shards 6 --no-excel
+            python "$TARGET_SCRIPT" --market twse --workers 4 --max-rounds 10 --shard-id ${{ matrix.shard }} --num-shards 6 --no-excel
           fi
 
       - name: 上傳 TWSE 分片產物 (Parquet 與 Log)
@@ -295,9 +295,9 @@ jobs:
           for attempt in $(seq 1 "$ATTEMPTS"); do
             echo "[*] TPEX probe attempt ${attempt}/${ATTEMPTS}"
             if [ -n "$TARGET_DATE" ]; then
-              python "$TARGET_SCRIPT" --market tpex --date "$TARGET_DATE" --workers 1 --max-rounds 1 --shard-id 0 --num-shards 8 --limit-symbols 5 --no-excel
+              python "$TARGET_SCRIPT" --market tpex --date "$TARGET_DATE" --workers 1 --max-rounds 10 --shard-id 0 --num-shards 8 --limit-symbols 5 --no-excel
             else
-              python "$TARGET_SCRIPT" --market tpex --workers 1 --max-rounds 1 --shard-id 0 --num-shards 8 --limit-symbols 5 --no-excel
+              python "$TARGET_SCRIPT" --market tpex --workers 1 --max-rounds 10 --shard-id 0 --num-shards 8 --limit-symbols 5 --no-excel
             fi
             rc=$?
             if [ "$rc" -eq 0 ]; then
@@ -448,9 +448,9 @@ jobs:
           for attempt in $(seq 1 "$ATTEMPTS"); do
             echo "[*] TPEX mini-canary attempt ${attempt}/${ATTEMPTS}"
             if [ -n "$TARGET_DATE" ]; then
-              python "$TARGET_SCRIPT" --market tpex --date "$TARGET_DATE" --workers 1 --max-rounds 1 --shard-id 0 --num-shards 8 --limit-symbols "$LIMIT_SYMBOLS" --no-excel
+              python "$TARGET_SCRIPT" --market tpex --date "$TARGET_DATE" --workers 1 --max-rounds 10 --shard-id 0 --num-shards 8 --limit-symbols "$LIMIT_SYMBOLS" --no-excel
             else
-              python "$TARGET_SCRIPT" --market tpex --workers 1 --max-rounds 1 --shard-id 0 --num-shards 8 --limit-symbols "$LIMIT_SYMBOLS" --no-excel
+              python "$TARGET_SCRIPT" --market tpex --workers 1 --max-rounds 10 --shard-id 0 --num-shards 8 --limit-symbols "$LIMIT_SYMBOLS" --no-excel
             fi
             rc=$?
             if [ "$rc" -eq 0 ]; then
@@ -610,9 +610,9 @@ jobs:
           for attempt in $(seq 1 "$ATTEMPTS"); do
             echo "[*] TPEX shard ${{ matrix.shard }} attempt ${attempt}/${ATTEMPTS}"
             if [ -n "$TARGET_DATE" ]; then
-              python "$TARGET_SCRIPT" --market tpex --date "$TARGET_DATE" --workers 1 --max-rounds 3 --shard-id ${{ matrix.shard }} --num-shards 8 --no-excel
+              python "$TARGET_SCRIPT" --market tpex --date "$TARGET_DATE" --workers 1 --max-rounds 10 --shard-id ${{ matrix.shard }} --num-shards 8 --no-excel
             else
-              python "$TARGET_SCRIPT" --market tpex --workers 1 --max-rounds 3 --shard-id ${{ matrix.shard }} --num-shards 8 --no-excel
+              python "$TARGET_SCRIPT" --market tpex --workers 1 --max-rounds 10 --shard-id ${{ matrix.shard }} --num-shards 8 --no-excel
             fi
             rc=$?
             if [ "$rc" -eq 0 ]; then

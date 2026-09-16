@@ -128,7 +128,7 @@ def run_full_market_crawler(
     workers: int = 8,
     twse_workers: Optional[int] = None,
     tpex_workers: Optional[int] = None,
-    max_rounds: int = 7,
+    max_rounds: int = 10,
     output_dir: str = None,
     export_excel: bool = True,
     receiver_email: Optional[str] = None,
@@ -179,7 +179,7 @@ def run_full_market_crawler(
     if markets in ["all", "twse"]:
         from twse_bsr_crawler import TWSEBrokerCrawler, get_active_listed_symbols
 
-        log_msg(f">>> [階段 1/2] 啟動 TWSE 上市股票分點抓取 ({actual_twse_w} Workers, 最多 6 輪安全補抓)...")
+        log_msg(f">>> [階段 1/2] 啟動 TWSE 上市股票分點抓取 ({actual_twse_w} Workers, 最多 {max_rounds} 輪安全補抓)...")
         twse_symbols = get_active_listed_symbols()
         if num_shards > 1:
             twse_symbols = [s for i, s in enumerate(twse_symbols) if i % num_shards == shard_id]
@@ -359,7 +359,7 @@ def run_full_market_crawler(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="全市場台股分點買賣日報表爬蟲協調控制器 (含 5 輪補抓與 Email 短缺通知)")
+    parser = argparse.ArgumentParser(description="全市場台股分點買賣日報表爬蟲協調控制器 (含多輪補抓與 Email 短缺通知)")
     parser.add_argument("--date", type=str, default=None, help="目標交易日期 (格式 YYYY-MM-DD)")
     parser.add_argument("--market", "--markets", dest="market", type=str, choices=["all", "twse", "tpex"], default="all", help="執行市場 (all, twse, tpex)")
     parser.add_argument(
@@ -380,7 +380,7 @@ def main():
         default=None,
         help="TPEX 上櫃專用併發線程數 (預設: 1，CDP 瀏覽器模式建議 1~2 最穩定)",
     )
-    parser.add_argument("--max-rounds", type=int, default=7, help="上市最大安全補抓輪數 (預設 7 輪，含終極深層收斂)")
+    parser.add_argument("--max-rounds", type=int, default=10, help="上市最大安全補抓輪數 (預設 10 輪，含最終深層收斂)")
     parser.add_argument("--no-excel", action="store_true", help="略過產出 Excel 檔")
     parser.add_argument("--output-dir", type=str, default=None, help="指定輸出目錄")
     parser.add_argument("--email", type=str, default=None, help="指定接收短缺日報的收件 Email")

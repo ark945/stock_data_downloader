@@ -1,5 +1,6 @@
 """Local sanity checks for GitHub Actions workflow configuration."""
 
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -43,8 +44,10 @@ def test_daily_workflow_uses_current_sharding() -> None:
     assert "name: tpex-mini-canary-log" in text
     assert "--num-shards 8" in text
     assert "TPEX_CI_ABORT_AFTER_CONSECUTIVE_FAILURES" in text
-    assert "--max-rounds 1" in text
-    assert "--max-rounds 3" in text
+    assert text.count("--max-rounds 10") == 8
+    assert re.search(r"--max-rounds 1(?!\d)", text) is None
+    assert re.search(r"--max-rounds 3(?!\d)", text) is None
+    assert re.search(r"--max-rounds 6(?!\d)", text) is None
     assert "--limit-symbols \"$LIMIT_SYMBOLS\"" in text
     assert "needs.tpex-shards.result == 'success'" in text
     assert "TPEX 20-Runner" not in text
