@@ -11,6 +11,7 @@ import os
 import sys
 import time
 import re
+from collections import Counter
 from typing import List, Optional, Tuple, Set
 from datetime import datetime, timezone, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -93,7 +94,7 @@ class TWSEBrokerCrawler:
     MENU_URL = "https://bsr.twse.com.tw/bshtm/bsMenu.aspx"
     CONTENT_URL = "https://bsr.twse.com.tw/bshtm/bsContent.aspx"
 
-    def __init__(self, delay_sec: float = 0.4, max_retries: int = 6):
+    def __init__(self, delay_sec: float = 0.4, max_retries: int = 6, debug: bool = False):
         """
         初始化上市爬蟲實例
         :param delay_sec: 每次請求之間的保護性延遲秒數 (預設 0.4s 安全平衡)
@@ -101,6 +102,7 @@ class TWSEBrokerCrawler:
         """
         self.delay_sec = delay_sec
         self.max_retries = max_retries
+        self.debug = debug
         self.headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
@@ -118,7 +120,8 @@ class TWSEBrokerCrawler:
             delta = 0 if today.hour >= 18 else 1
         return (today - pd.Timedelta(days=delta)).strftime("%Y-%m-%d")
 
-    def fetch_stock_raw_csv(self, stock_id: str) -> Optional[str]:
+    def fetch_stock_raw_csv_with_reason(self, stock_id: str) -> Tuple[Optional[str], str]:
+        last_reason = "unknown"
         for attempt in range(1, self.max_retries + 1):
             try:
                 session = requests.Session()
@@ -127,6 +130,7 @@ class TWSEBrokerCrawler:
                 # 1. 取得首頁與 ViewState
                 r_menu = session.get(self.MENU_URL, timeout=8)
                 if r_menu.status_code != 200:
+                    last_reason = f"menu_http_{r_menu.status_code}"
                     time.sleep(0.3)
                     continue
 
@@ -137,6 +141,7 @@ class TWSEBrokerCrawler:
                 captcha_imgs = [img["src"] for img in soup.find_all("img") if "Captcha" in img.get("src", "")]
 
                 if not (viewstate_el and captcha_imgs):
+                    last_reason = "menu_parse_missing_viewstate_or_captcha"
                     time.sleep(0.3)
                     continue
 
@@ -148,10 +153,12 @@ class TWSEBrokerCrawler:
                 captcha_url = "https://bsr.twse.com.tw/bshtm/" + captcha_imgs[0]
                 r_img = session.get(captcha_url, timeout=8)
                 if r_img.status_code != 200:
+                    last_reason = f"captcha_http_{r_img.status_code}"
                     continue
 
                 captcha_code = recognize_captcha(r_img.content)
                 if not captcha_code:
+                    last_reason = "captcha_ocr_failed"
                     continue
 
                 # 3. POST 表單送出查詢
@@ -165,6 +172,9 @@ class TWSEBrokerCrawler:
                     "btnOK": "查詢",
                 }
                 r_post = session.post(self.MENU_URL, data=payload, timeout=8)
+                if r_post.status_code != 200:
+                    last_reason = f"post_http_{r_post.status_code}"
+                    continue
                 post_html = r_post.text
 
                 # 正向精確判定：只要伺服器生成下載連結，代表查詢成功，立刻下載 CSV
@@ -174,21 +184,43 @@ class TWSEBrokerCrawler:
                     if r_content.status_code == 200 and len(r_content.content) > 100:
                         raw_text = r_content.content.decode("utf-8-sig", errors="replace")
                         if "券商買賣股票成交價量資訊" in raw_text or "股票代碼" in raw_text:
-                            return raw_text
+                            return raw_text, "success"
+                        last_reason = "content_schema_mismatch"
+                        continue
+                    last_reason = f"content_http_{r_content.status_code}_or_too_small"
+                    continue
 
                 # 若明確回傳查無代碼或查無符合資料，代表當日確實無交易
                 if "查無此代碼" in post_html or "查無符合條件之資料" in post_html or "查無此證券" in post_html:
-                    return ""
+                    return "", "no_trade_confirmed"
+                if "驗證碼" in post_html:
+                    last_reason = "captcha_invalid"
+                elif "系統忙碌" in post_html or "稍後再試" in post_html:
+                    last_reason = "server_busy_or_rate_limited"
+                else:
+                    last_reason = "post_response_unclassified"
 
                 # 其餘狀況 (驗證碼錯誤或伺服器忙碌) 自動進入下一次換圖重試
                 time.sleep(0.2)
                 continue
 
-            except Exception:
-                pass
+            except requests.Timeout:
+                last_reason = "request_timeout"
+            except requests.RequestException as e:
+                last_reason = f"request_exception_{type(e).__name__}"
+            except Exception as e:
+                last_reason = f"exception_{type(e).__name__}"
+
+            if self.debug:
+                ts = get_taipei_now().strftime("%H:%M:%S")
+                print(f"[{ts}] [TWSE-DEBUG] {stock_id} attempt {attempt}/{self.max_retries} -> {last_reason}")
             time.sleep(0.1)
 
-        return None
+        return None, last_reason
+
+    def fetch_stock_raw_csv(self, stock_id: str) -> Optional[str]:
+        csv_text, _ = self.fetch_stock_raw_csv_with_reason(stock_id)
+        return csv_text
 
     def parse_csv_to_dataframe(self, csv_text: str, stock_id: str, trade_date: str) -> Optional[pd.DataFrame]:
         lines = csv_text.splitlines()
@@ -281,19 +313,19 @@ class TWSEBrokerCrawler:
 
         return res_df
 
-    def _crawl_single_worker(self, sym: str, trade_date: str) -> Tuple[str, Optional[pd.DataFrame], str]:
+    def _crawl_single_worker(self, sym: str, trade_date: str) -> Tuple[str, Optional[pd.DataFrame], str, str]:
         if self.delay_sec > 0:
             time.sleep(self.delay_sec)
-        csv_text = self.fetch_stock_raw_csv(sym)
+        csv_text, reason = self.fetch_stock_raw_csv_with_reason(sym)
         if csv_text == "":
-            return (sym, None, "no_trade")
+            return (sym, None, "no_trade", reason)
         if csv_text is None:
-            return (sym, None, "failed")
+            return (sym, None, "failed", reason)
 
         df = self.parse_csv_to_dataframe(csv_text, sym, trade_date)
         if df is not None and not df.empty:
-            return (sym, df, "success")
-        return (sym, None, "failed")
+            return (sym, df, "success", "success")
+        return (sym, None, "failed", "parse_empty_or_invalid")
 
     def crawl_stocks(
         self,
@@ -301,10 +333,10 @@ class TWSEBrokerCrawler:
         trade_date: str = "",
         max_workers: int = 4,
         max_retry_rounds: int = 6
-    ) -> Tuple[List[pd.DataFrame], List[str], int, List[str]]:
+    ) -> Tuple[List[pd.DataFrame], List[str], int, List[str], dict]:
         """
         批次抓取指定上市股票清單 (支援最多 6 輪自適應安全補抓機制)
-        :return: (all_dfs, final_failed_symbols, total_rounds_executed, no_trade_symbols)
+        :return: (all_dfs, final_failed_symbols, total_rounds_executed, no_trade_symbols, failed_reason_map)
         """
         if not trade_date:
             trade_date = self._get_latest_trade_date()
@@ -322,6 +354,7 @@ class TWSEBrokerCrawler:
         all_dfs = []
         failed_symbols = []
         no_trade_symbols = []
+        failed_reason_map = {}
         completed_count = 0
         total_rows = 0
         start_time = time.time()
@@ -335,15 +368,21 @@ class TWSEBrokerCrawler:
 
             for future in as_completed(future_to_sym):
                 completed_count += 1
-                sym, df, status = future.result()
+                sym, df, status, reason = future.result()
 
                 if status == "success" and df is not None and not df.empty:
                     all_dfs.append(df)
                     total_rows += len(df)
+                    failed_reason_map.pop(sym, None)
                 elif status == "no_trade":
                     no_trade_symbols.append(sym)
+                    failed_reason_map.pop(sym, None)
                 else:
                     failed_symbols.append(sym)
+                    failed_reason_map[sym] = reason
+                    if self.debug:
+                        ts_dbg = get_taipei_now().strftime("%H:%M:%S")
+                        print(f"[{ts_dbg}] [TWSE-DEBUG] 第1輪待補 {sym} -> {reason}")
 
                 if completed_count % 15 == 0 or completed_count == total_symbols:
                     elapsed = time.time() - start_time
@@ -392,8 +431,9 @@ class TWSEBrokerCrawler:
                 except Exception:
                     pass
 
-            retry_crawler = TWSEBrokerCrawler(delay_sec=current_delay, max_retries=4)
+            retry_crawler = TWSEBrokerCrawler(delay_sec=current_delay, max_retries=4, debug=self.debug)
             still_failed = []
+            still_failed_reason_map = {}
             retry_success = 0
             retry_done_cnt = 0
 
@@ -405,7 +445,7 @@ class TWSEBrokerCrawler:
 
                 for fut in as_completed(future_map):
                     retry_done_cnt += 1
-                    sym, df, status = fut.result()
+                    sym, df, status, reason = fut.result()
                     sym_name = name_map.get(sym, "")
                     name_str = f"({sym_name})" if sym_name else ""
                     ts_item = datetime.now().strftime("%H:%M:%S")
@@ -418,9 +458,13 @@ class TWSEBrokerCrawler:
                     elif status == "no_trade":
                         no_trade_symbols.append(sym)
                         print(f"[{ts_item}]   [第{rounds_executed}輪 {retry_done_cnt}/{retry_count}] [無交易] {sym} {name_str} (TWSE 回覆查無符合資料)")
+                        failed_reason_map.pop(sym, None)
                     else:
                         still_failed.append(sym)
+                        still_failed_reason_map[sym] = reason
                         print(f"[{ts_item}]   [第{rounds_executed}輪 {retry_done_cnt}/{retry_count}] [待下輪補抓] {sym} {name_str} (技術性失敗)")
+                        if self.debug:
+                            print(f"[{ts_item}]   [TWSE-DEBUG] {sym} {name_str} 技術性失敗原因: {reason}")
                     sys.stdout.flush()
 
             ts_done = datetime.now().strftime("%H:%M:%S")
@@ -429,6 +473,7 @@ class TWSEBrokerCrawler:
                 f"(剩餘待補: {len(still_failed)} 檔, 已確認無交易: {len(no_trade_symbols)} 檔)"
             )
             failed_symbols = still_failed
+            failed_reason_map = still_failed_reason_map
 
         ts_all_done = datetime.now().strftime("%H:%M:%S")
         if not failed_symbols:
@@ -441,5 +486,9 @@ class TWSEBrokerCrawler:
                 f"\n[{ts_all_done}] [!] 達到最大補抓輪數 ({max_retry_rounds} 輪)，剩餘技術性失敗: {len(failed_symbols)} 檔 "
                 f"| 已確認無交易: {len(no_trade_symbols)} 檔"
             )
+            if self.debug and failed_reason_map:
+                reason_counter = Counter(failed_reason_map.values())
+                reason_text = ", ".join([f"{k}: {v}" for k, v in reason_counter.items()])
+                print(f"[{ts_all_done}] [TWSE-DEBUG] 失敗原因統計 -> {reason_text}")
 
-        return all_dfs, failed_symbols, rounds_executed, no_trade_symbols
+        return all_dfs, failed_symbols, rounds_executed, no_trade_symbols, failed_reason_map

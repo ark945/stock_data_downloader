@@ -92,7 +92,8 @@ def run_full_market_crawler(
     export_excel: bool = True,
     receiver_email: Optional[str] = None,
     shard_id: int = 0,
-    num_shards: int = 1
+    num_shards: int = 1,
+    debug_twse: bool = False
 ):
     start_dt = get_taipei_now()
     start_str = start_dt.strftime("%Y-%m-%d %H:%M:%S")
@@ -135,8 +136,8 @@ def run_full_market_crawler(
         total_target_count += len(twse_symbols)
         log_msg(f"[*] 取得上市標的清單: {len(twse_symbols)} 檔 (分片 {shard_id + 1}/{num_shards})")
         
-        twse_crawler = TWSEBrokerCrawler(delay_sec=0.4, max_retries=6)
-        twse_dfs, twse_failed, r_exec, twse_no_trade = twse_crawler.crawl_stocks(
+        twse_crawler = TWSEBrokerCrawler(delay_sec=0.4, max_retries=6, debug=debug_twse)
+        twse_dfs, twse_failed, r_exec, twse_no_trade, twse_failed_reasons = twse_crawler.crawl_stocks(
             symbols=twse_symbols,
             trade_date=trade_date,
             max_workers=workers,
@@ -147,11 +148,12 @@ def run_full_market_crawler(
         rounds_executed = max(rounds_executed, r_exec)
         
         for sym in twse_failed:
+            reason = twse_failed_reasons.get(sym, "技術性失敗")
             all_failed_items.append({
                 "symbol": sym,
                 "name": name_map.get(sym, "未知"),
                 "market": "TWSE",
-                "reason": f"達第 {r_exec} 輪重試上限"
+                "reason": f"達第 {r_exec} 輪重試上限（{reason}）"
             })
         log_msg(f"[✓] TWSE 上市抓取完成：成功 {len(twse_dfs)} 檔，確認無交易 {len(twse_no_trade)} 檔，技術性失敗 {len(twse_failed)} 檔")
 
@@ -289,6 +291,7 @@ def main():
     parser.add_argument("--email", type=str, default=None, help="指定接收短缺日報的收件 Email")
     parser.add_argument("--shard-id", type=int, default=0, help="分散式分片索引 (0-indexed)")
     parser.add_argument("--num-shards", type=int, default=1, help="分散式總分片數 (預設 1)")
+    parser.add_argument("--debug-twse", action="store_true", help="啟用 TWSE 抓取失敗原因除錯日誌")
 
     args = parser.parse_args()
     run_full_market_crawler(
@@ -300,7 +303,8 @@ def main():
         export_excel=not args.no_excel,
         receiver_email=args.email,
         shard_id=args.shard_id,
-        num_shards=args.num_shards
+        num_shards=args.num_shards,
+        debug_twse=args.debug_twse
     )
 
 
