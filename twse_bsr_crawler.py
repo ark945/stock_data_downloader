@@ -11,9 +11,10 @@ import os
 import sys
 import time
 import re
+import json
 from collections import Counter
 from dataclasses import dataclass
-from threading import Event
+from threading import Event, Lock
 from typing import Dict, List, Optional, Tuple, Set
 from datetime import datetime, timezone, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -23,6 +24,11 @@ import pandas as pd
 import numpy as np
 
 TAIPEI_TZ = timezone(timedelta(hours=8))
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 def get_taipei_now() -> datetime:
     """取得台灣時間 (UTC+8)"""
@@ -102,12 +108,26 @@ class TWSEBrokerCrawler:
 
     MENU_URL = "https://bsr.twse.com.tw/bshtm/bsMenu.aspx"
     CONTENT_URL = "https://bsr.twse.com.tw/bshtm/bsContent.aspx"
+    NO_DATA_MARKERS = (
+        "查無資料",
+        "查無此代碼",
+        "查無符合條件之資料",
+        "查無此證券",
+    )
 
-    def __init__(self, delay_sec: float = 0.4, max_retries: int = 6):
+    def __init__(
+        self,
+        delay_sec: float = 0.4,
+        max_retries: int = 6,
+        diagnostics_dir: Optional[str] = None,
+        diagnostic_symbols: Optional[Set[str]] = None,
+    ):
         """
         初始化上市爬蟲實例
         :param delay_sec: 每次請求之間的保護性延遲秒數 (預設 0.4s 安全平衡)
         :param max_retries: 單一股票單輪最大重試次數
+        :param diagnostics_dir: 若提供，將輸出單檔診斷 HTML / JSON 檔
+        :param diagnostic_symbols: 只對這些股票輸出診斷檔；未提供時代表 diagnostics_dir 啟用後全部輸出
         """
         self.delay_sec = delay_sec
         self.max_retries = max_retries
@@ -125,10 +145,61 @@ class TWSEBrokerCrawler:
             "reason_counts": {},
         }
         self.stop_event = Event()
+        self.diagnostics_dir = diagnostics_dir
+        self.diagnostic_symbols = {str(sym).strip().upper() for sym in diagnostic_symbols} if diagnostic_symbols else None
+        self._diagnostic_lock = Lock()
+        self._diagnostic_fetch_counts: Dict[str, int] = {}
 
     @staticmethod
     def _normalize_reason(reason: str) -> str:
         return reason.replace(":", "_").replace(" ", "_") if reason else "unknown"
+
+    @classmethod
+    def _is_no_data_response(cls, html: str) -> bool:
+        # TWSE 會用多種文案表示正常查詢但當日無券商分點資料，不能一律視為技術失敗。
+        return any(marker in html for marker in cls.NO_DATA_MARKERS)
+
+    def _should_collect_diagnostics(self, stock_id: str) -> bool:
+        if not self.diagnostics_dir:
+            return False
+        if self.diagnostic_symbols is None:
+            return True
+        return str(stock_id).strip().upper() in self.diagnostic_symbols
+
+    def _next_diagnostic_fetch_no(self, stock_id: str) -> int:
+        with self._diagnostic_lock:
+            current = self._diagnostic_fetch_counts.get(stock_id, 0) + 1
+            self._diagnostic_fetch_counts[stock_id] = current
+            return current
+
+    def _write_diagnostic_artifact(
+        self,
+        stock_id: str,
+        fetch_no: int,
+        attempt_no: int,
+        label: str,
+        content: str,
+        extension: str,
+    ) -> None:
+        if not self._should_collect_diagnostics(stock_id):
+            return
+        os.makedirs(self.diagnostics_dir, exist_ok=True)
+        filename = f"{str(stock_id).strip()}_fetch{fetch_no:02d}_attempt{attempt_no:02d}_{label}.{extension}"
+        path = os.path.join(self.diagnostics_dir, filename)
+        with open(path, "w", encoding="utf-8", errors="replace") as f:
+            f.write(content)
+
+    def _write_diagnostic_json(
+        self,
+        stock_id: str,
+        fetch_no: int,
+        attempt_no: int,
+        payload: Dict[str, object],
+    ) -> None:
+        if not self._should_collect_diagnostics(stock_id):
+            return
+        text = json.dumps(payload, ensure_ascii=False, indent=2)
+        self._write_diagnostic_artifact(stock_id, fetch_no, attempt_no, "summary", text, "json")
 
     def request_stop(self):
         self.stop_event.set()
@@ -154,6 +225,7 @@ class TWSEBrokerCrawler:
 
     def fetch_stock_raw_csv(self, stock_id: str) -> FetchResult:
         last_reason = "unknown"
+        fetch_no = self._next_diagnostic_fetch_no(stock_id) if self._should_collect_diagnostics(stock_id) else 0
         for attempt in range(1, self.max_retries + 1):
             if self.stop_event.is_set():
                 return FetchResult(status="technical_failure", raw_csv=None, reason="interrupted")
@@ -165,6 +237,12 @@ class TWSEBrokerCrawler:
                 r_menu = session.get(self.MENU_URL, timeout=8)
                 if r_menu.status_code != 200:
                     last_reason = f"menu_http_error:{r_menu.status_code}"
+                    self._write_diagnostic_json(
+                        stock_id,
+                        fetch_no,
+                        attempt,
+                        {"stage": "menu", "status": "technical_failure", "reason": last_reason},
+                    )
                     if self._sleep_or_stop(0.3):
                         return FetchResult(status="technical_failure", raw_csv=None, reason="interrupted")
                     continue
@@ -177,6 +255,13 @@ class TWSEBrokerCrawler:
 
                 if not (viewstate_el and captcha_imgs):
                     last_reason = "menu_missing_form_fields"
+                    self._write_diagnostic_artifact(stock_id, fetch_no, attempt, "menu_response", r_menu.text, "html")
+                    self._write_diagnostic_json(
+                        stock_id,
+                        fetch_no,
+                        attempt,
+                        {"stage": "menu", "status": "technical_failure", "reason": last_reason},
+                    )
                     if self._sleep_or_stop(0.3):
                         return FetchResult(status="technical_failure", raw_csv=None, reason="interrupted")
                     continue
@@ -190,11 +275,23 @@ class TWSEBrokerCrawler:
                 r_img = session.get(captcha_url, timeout=8)
                 if r_img.status_code != 200:
                     last_reason = f"captcha_http_error:{r_img.status_code}"
+                    self._write_diagnostic_json(
+                        stock_id,
+                        fetch_no,
+                        attempt,
+                        {"stage": "captcha", "status": "technical_failure", "reason": last_reason},
+                    )
                     continue
 
                 captcha_code = recognize_captcha(r_img.content)
                 if not captcha_code:
                     last_reason = "captcha_recognition_failed"
+                    self._write_diagnostic_json(
+                        stock_id,
+                        fetch_no,
+                        attempt,
+                        {"stage": "captcha", "status": "technical_failure", "reason": last_reason},
+                    )
                     continue
 
                 # 3. POST 表單送出查詢
@@ -210,10 +307,22 @@ class TWSEBrokerCrawler:
                 r_post = session.post(self.MENU_URL, data=payload, timeout=8)
                 if r_post.status_code != 200:
                     last_reason = f"post_http_error:{r_post.status_code}"
+                    self._write_diagnostic_json(
+                        stock_id,
+                        fetch_no,
+                        attempt,
+                        {
+                            "stage": "post",
+                            "status": "technical_failure",
+                            "reason": last_reason,
+                            "captcha_code": captcha_code,
+                        },
+                    )
                     if self._sleep_or_stop(0.2):
                         return FetchResult(status="technical_failure", raw_csv=None, reason="interrupted")
                     continue
                 post_html = r_post.text
+                self._write_diagnostic_artifact(stock_id, fetch_no, attempt, "post_response", post_html, "html")
 
                 # 正向精確判定：只要伺服器生成下載連結，代表查詢成功，立刻下載 CSV
                 if "HyperLink_DownloadCSV" in post_html or "bsContent.aspx" in post_html:
@@ -222,26 +331,89 @@ class TWSEBrokerCrawler:
                     r_content = session.get(self.CONTENT_URL, timeout=8)
                     if r_content.status_code != 200:
                         last_reason = f"content_http_error:{r_content.status_code}"
+                        self._write_diagnostic_json(
+                            stock_id,
+                            fetch_no,
+                            attempt,
+                            {
+                                "stage": "content",
+                                "status": "technical_failure",
+                                "reason": last_reason,
+                                "captcha_code": captcha_code,
+                            },
+                        )
                         if self._sleep_or_stop(0.2):
                             return FetchResult(status="technical_failure", raw_csv=None, reason="interrupted")
                         continue
                     if len(r_content.content) > 100:
                         raw_text = r_content.content.decode("utf-8-sig", errors="replace")
                         if "券商買賣股票成交價量資訊" in raw_text or "股票代碼" in raw_text:
+                            self._write_diagnostic_json(
+                                stock_id,
+                                fetch_no,
+                                attempt,
+                                {
+                                    "stage": "content",
+                                    "status": "success",
+                                    "reason": "csv_download_ok",
+                                    "captcha_code": captcha_code,
+                                },
+                            )
                             return FetchResult(status="success", raw_csv=raw_text, reason="csv_download_ok")
                     last_reason = "content_invalid_payload"
+                    self._write_diagnostic_artifact(
+                        stock_id,
+                        fetch_no,
+                        attempt,
+                        "content_response",
+                        r_content.content.decode("utf-8-sig", errors="replace"),
+                        "txt",
+                    )
+                    self._write_diagnostic_json(
+                        stock_id,
+                        fetch_no,
+                        attempt,
+                        {
+                            "stage": "content",
+                            "status": "technical_failure",
+                            "reason": last_reason,
+                            "captcha_code": captcha_code,
+                        },
+                    )
                     if self._sleep_or_stop(0.2):
                         return FetchResult(status="technical_failure", raw_csv=None, reason="interrupted")
                     continue
 
-                # 若明確回傳查無代碼或查無符合資料，代表當日確實無交易
-                if "查無此代碼" in post_html or "查無符合條件之資料" in post_html or "查無此證券" in post_html:
+                # 若查詢頁已明確回傳「查無資料」類文案，代表網站正常響應，只是當日無可下載資料。
+                if self._is_no_data_response(post_html):
+                    self._write_diagnostic_json(
+                        stock_id,
+                        fetch_no,
+                        attempt,
+                        {
+                            "stage": "post",
+                            "status": "no_data",
+                            "reason": "no_data_reported",
+                            "captcha_code": captcha_code,
+                        },
+                    )
                     return FetchResult(status="no_data", raw_csv="", reason="no_data_reported")
 
                 if "驗證碼" in post_html and ("錯誤" in post_html or "不符" in post_html):
                     last_reason = "captcha_validation_failed"
                 else:
                     last_reason = "post_missing_download_link"
+                self._write_diagnostic_json(
+                    stock_id,
+                    fetch_no,
+                    attempt,
+                    {
+                        "stage": "post",
+                        "status": "technical_failure",
+                        "reason": last_reason,
+                        "captcha_code": captcha_code,
+                    },
+                )
 
                 # 其餘狀況 (驗證碼錯誤或伺服器忙碌) 自動進入下一次換圖重試
                 if self._sleep_or_stop(0.2):
@@ -456,13 +628,13 @@ class TWSEBrokerCrawler:
             retry_count = len(failed_symbols)
             is_final_round = (rounds_executed == max_retry_rounds)
             current_delay = delay_schedule[min(rounds_executed - 2, len(delay_schedule) - 1)]
-            current_workers = 2 if is_final_round else min(4, retry_count)
+            current_workers = min(max_workers, retry_count)
             single_stock_retries = 8 if is_final_round else (6 if rounds_executed >= 5 else 4)
 
             ts_round = get_taipei_now().strftime("%H:%M:%S")
             print(f"\n" + "-"*50)
             if is_final_round:
-                print(f"[{ts_round}] 🎯 【啟動第 {rounds_executed}/{max_retry_rounds} 輪終極收斂跑到底機制】(待補抓: {retry_count} 檔)")
+                print(f"[{ts_round}] [FINAL] 【啟動第 {rounds_executed}/{max_retry_rounds} 輪終極收斂跑到底機制】(待補抓: {retry_count} 檔)")
                 print(f"[{ts_round}] [*] 終極防護策略: {current_workers}-Workers 溫和無干擾模式, 請求間隔 {current_delay}s, 單檔最高 {single_stock_retries} 次深度辨識重試！")
             else:
                 print(f"[{ts_round}] [*] 啟動第 {rounds_executed}/{max_retry_rounds} 輪精準安全補抓佇列 (待補抓: {retry_count} 檔)")
@@ -486,7 +658,14 @@ class TWSEBrokerCrawler:
                 except Exception:
                     pass
 
-            retry_crawler = TWSEBrokerCrawler(delay_sec=current_delay, max_retries=single_stock_retries)
+            retry_crawler = TWSEBrokerCrawler(
+                delay_sec=current_delay,
+                max_retries=single_stock_retries,
+                diagnostics_dir=self.diagnostics_dir,
+                diagnostic_symbols=self.diagnostic_symbols,
+            )
+            retry_crawler._diagnostic_lock = self._diagnostic_lock
+            retry_crawler._diagnostic_fetch_counts = self._diagnostic_fetch_counts
             if self.stop_event.is_set():
                 retry_crawler.request_stop()
             still_failed = []
