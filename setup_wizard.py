@@ -263,26 +263,12 @@ def interactive_setup_env():
 
 def _setup_workers_part(env_data: dict):
     print("⚡ --- [雙市場採集線程 (Workers) 設定] ---")
-    twse_def = env_data.get("TWSE_WORKERS", "8")
-    tpex_def = env_data.get("TPEX_WORKERS", "1")
+    print("🛡️ 【本地端防護原則】：為避免遭遇證交所/櫃買中心 IP 限流與 403 阻擋，本地一律使用單線程 (1 Worker) 採集。")
+    env_data["TWSE_WORKERS"] = "1"
+    env_data["TPEX_WORKERS"] = "1"
+    print("  [✓] 上市 (TWSE) 採集線程: 1 Worker (單線程安全模式)")
+    print("  [✓] 上櫃 (TPEX) 採集線程: 1 Worker (單瀏覽器穩健模式)")
 
-    print("👉 上市 (TWSE) 併發線程數 (純 HTTP 高速請求，推薦 8 ~ 12)：")
-    if twse_def:
-        print(f"   [目前: {twse_def}]")
-    val_twse = input("TWSE_WORKERS (按 Enter 預設 8) > ").strip()
-    if val_twse.isdigit() and int(val_twse) >= 1:
-        env_data["TWSE_WORKERS"] = val_twse
-    elif not env_data.get("TWSE_WORKERS"):
-        env_data["TWSE_WORKERS"] = "8"
-
-    print("👉 上櫃 (TPEX) 併發線程數 (CDP 瀏覽器模式，推薦 1 ~ 2 最穩定零崩潰)：")
-    if tpex_def:
-        print(f"   [目前: {tpex_def}]")
-    val_tpex = input("TPEX_WORKERS (按 Enter 預設 1) > ").strip()
-    if val_tpex.isdigit() and int(val_tpex) >= 1:
-        env_data["TPEX_WORKERS"] = val_tpex
-    elif not env_data.get("TPEX_WORKERS"):
-        env_data["TPEX_WORKERS"] = "1"
 
 
 def _setup_gdrive_part(env_data: dict):
@@ -380,78 +366,54 @@ def run_quick_test():
 
 
 def get_workers_selection() -> tuple[int, int]:
-    """選擇運行線程與速度模式 (上市與上櫃獨立設定)"""
-    cur_env = read_current_env()
-    def_twse = int(cur_env.get("TWSE_WORKERS", 8))
-    def_tpex = int(cur_env.get("TPEX_WORKERS", 1))
-
-    print("\n⚡ 選擇雙市場採集速度與線程模式：")
-    print(f"  1. 🛡️ 【智能黃金配置 (推薦 ⭐)】上市 8 線程 (HTTP極速) + 上櫃 1 線程 (單瀏覽器 100% 穩健零崩潰)")
-    print(f"  2. 🚀 【極速衝刺模式】上市 12 線程 + 上櫃 2 線程 (需高階 CPU)")
-    print(f"  3. 🐢 【極低負擔省電模式】上市 4 線程 + 上櫃 1 線程")
-    print(f"  4. 🛠️ 【進階自訂】手動分別指定 TWSE 與 TPEX 線程數")
-    print(f"  (按 Enter 直接套用目前設定: 上市 {def_twse} / 上櫃 {def_tpex} Workers)")
-
-    w_choice = input(f"\n請選擇速度模式 (1-4，按 Enter 預設 1) > ").strip()
-    if w_choice == "2":
-        return 12, 2
-    elif w_choice == "3":
-        return 4, 1
-    elif w_choice == "4":
-        w_twse_in = input(f"請輸入上市 (TWSE) 線程數 (1~16，目前: {def_twse}) > ").strip()
-        w_tpex_in = input(f"請輸入上櫃 (TPEX) 線程數 (1~4，目前: {def_tpex}) > ").strip()
-        twse_val = int(w_twse_in) if w_twse_in.isdigit() and 1 <= int(w_twse_in) <= 16 else def_twse
-        tpex_val = int(w_tpex_in) if w_tpex_in.isdigit() and 1 <= int(w_tpex_in) <= 4 else def_tpex
-        return twse_val, tpex_val
-    elif w_choice == "1" or not w_choice:
-        return def_twse, def_tpex
-    return def_twse, def_tpex
+    """本地採集全面強制使用單線程 (1, 1)，保障防限流與 100% 成功率"""
+    print("\n⚡ [本地端運行配置]：全面鎖定單線程安全模式 (TWSE 1 Worker + TPEX 1 Worker，100% 穩定防限流零崩潰)")
+    return 1, 1
 
 
 def run_crawler_menu():
     """執行爬蟲任務選單"""
-    print("\n🚀 選擇爬蟲任務：")
+    print("\n🚀 選擇爬蟲任務 (本地全面採用單線程 1 Worker 防禦模式)：")
     print("  1. 一鍵採集全市場 (上市 + 上櫃) [最新交易日, 產出 Parquet 與 Excel]")
     print("  2. 一鍵採集全市場 (極速模式，僅產出 Parquet 不出 Excel)")
-    print("  3. 僅採集上市股票 (TWSE)")
+    print("  3. 僅採集上市股票 (TWSE) [調用全新 v2 斷點續傳爬蟲]")
     print("  4. 僅採集上櫃股票 (TPEX)")
     print("  5. 指定歷史日期採集 (例如 2026-08-21)")
     print("  0. 返回主選單")
 
     c = input("\n請輸入選項 (0-5) > ").strip()
     if c in ["1", "2", "3", "4", "5"]:
-        # 取得雙市場獨立線程配置
+        # 本地端全面強制鎖定單線程 (1, 1)
         twse_w, tpex_w = get_workers_selection()
 
         if c == "1":
             run_subprocess_interruptibly([
                 sys.executable, "stock_crawler_coordinator.py",
                 "--market", "all",
-                "--twse-workers", str(twse_w),
-                "--tpex-workers", str(tpex_w),
+                "--twse-workers", "1",
+                "--tpex-workers", "1",
                 "--max-rounds", "10"
             ])
         elif c == "2":
             run_subprocess_interruptibly([
                 sys.executable, "stock_crawler_coordinator.py",
                 "--market", "all",
-                "--twse-workers", str(twse_w),
-                "--tpex-workers", str(tpex_w),
+                "--twse-workers", "1",
+                "--tpex-workers", "1",
                 "--max-rounds", "10",
                 "--no-excel"
             ])
         elif c == "3":
+            # 直接呼叫全新一代具備斷點續傳與自動熔斷保護的 twse_crawler_v2.py
             run_subprocess_interruptibly([
-                sys.executable, "stock_crawler_coordinator.py",
-                "--market", "twse",
-                "--twse-workers", str(twse_w),
-                "--max-rounds", "10"
+                sys.executable, "twse_crawler_v2.py",
+                "--delay", "1.0"
             ])
         elif c == "4":
             run_subprocess_interruptibly([
                 sys.executable, "stock_crawler_coordinator.py",
                 "--market", "tpex",
-                "--tpex-workers", str(tpex_w),
+                "--tpex-workers", "1",
                 "--max-rounds", "10"
             ])
         elif c == "5":
@@ -461,8 +423,8 @@ def run_crawler_menu():
                     sys.executable, "stock_crawler_coordinator.py",
                     "--date", date_str,
                     "--market", "all",
-                    "--twse-workers", str(twse_w),
-                    "--tpex-workers", str(tpex_w),
+                    "--twse-workers", "1",
+                    "--tpex-workers", "1",
                     "--max-rounds", "10"
                 ])
 

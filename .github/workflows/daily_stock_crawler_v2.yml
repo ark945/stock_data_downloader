@@ -1,0 +1,281 @@
+name: 每日全市場券商分點爬蟲排程 v2 (TWSE 4-Runner v2 + TPEX 8-Runner)
+
+env:
+  TZ: "Asia/Taipei"
+  PYTHONIOENCODING: "utf-8"
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_date:
+        description: "指定抓取日期 (YYYY-MM-DD，留空則自動判斷最新交易日)"
+        required: false
+        default: ""
+      market:
+        description: "抓取市場 (all / twse / tpex)"
+        required: true
+        default: "all"
+
+  repository_dispatch:
+    types: [trigger-daily-crawler-v2, run-daily-crawler-v2]
+
+jobs:
+  # -----------------------------------------------------------------
+  # 前置檢查：判定是否為營業日與 Google Drive 查重
+  # -----------------------------------------------------------------
+  pre-check:
+    name: 檢查 Google Drive 雲端資料庫狀態
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      should_skip: ${{ steps.check.outputs.should_skip }}
+      target_date: ${{ steps.check.outputs.target_date }}
+
+    steps:
+      - name: 檢出專案代碼 (Checkout)
+        uses: actions/checkout@v4
+
+      - name: 設定 Python 環境
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 安裝檢查依賴
+        run: |
+          pip install requests google-api-python-client google-auth
+
+      - name: 判斷今日是否為台股營業日 (Trading Day Pre-check)
+        id: trading_day_check
+        run: |
+          TARGET="${{ github.event.inputs.target_date }}"
+          EVENT="${{ github.event_name }}"
+          FORCE="${{ secrets.FORCE_CRAWL }}"
+          
+          if [ "$EVENT" = "workflow_dispatch" ] && [ -n "$TARGET" ]; then
+            echo "[*] 手動指定日期 ($TARGET)，繼續後續流程。"
+            echo "is_open=true" >> $GITHUB_OUTPUT
+          elif [ "$FORCE" = "true" ]; then
+            echo "[*] 檢測到 FORCE_CRAWL 旗標，繼續後續流程。"
+            echo "is_open=true" >> $GITHUB_OUTPUT
+          else
+            if python trading_calendar.py --check-today; then
+              echo "is_open=true" >> $GITHUB_OUTPUT
+            else
+              echo "is_open=false" >> $GITHUB_OUTPUT
+              echo "[⏸️] 本日非台股開盤營業日，休市自動跳過後續所有抓取作業！"
+            fi
+          fi
+
+      - name: 查詢 Google Drive 目標資料夾
+        id: check
+        env:
+          GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
+          GDRIVE_UPLOAD_URL: ${{ secrets.GDRIVE_UPLOAD_URL }}
+          GDRIVE_SERVICE_ACCOUNT_KEY: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_KEY }}
+          SPECIFIED_DATE: ${{ github.event.inputs.target_date }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          CHECK_SCRIPT="check_gdrive_exists.py"
+          if [ ! -f "$CHECK_SCRIPT" ]; then
+            CHECK_SCRIPT="stock_data_downloader/check_gdrive_exists.py"
+          fi
+
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ -n "$SPECIFIED_DATE" ]; then
+            echo "should_skip=false" >> $GITHUB_OUTPUT
+            echo "target_date=$SPECIFIED_DATE" >> $GITHUB_OUTPUT
+            echo "[*] 手動指定日期 ($SPECIFIED_DATE)，略過自動快篩。"
+          else
+            if [ "${{ steps.trading_day_check.outputs.is_open }}" = "false" ]; then
+              echo "should_skip=true" >> $GITHUB_OUTPUT
+              echo "target_date=$(python trading_calendar.py --latest 2>/dev/null || date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+              echo "[*] 休市日標記 should_skip=true，跳過本日排程。"
+              exit 0
+            fi
+            python "$CHECK_SCRIPT" "$SPECIFIED_DATE"
+          fi
+
+  # -----------------------------------------------------------------
+  # 每日收盤價採集 (TWSE + TPEX)
+  # -----------------------------------------------------------------
+  close-price:
+    name: 每日收盤價採集 (TWSE + TPEX)
+    needs: pre-check
+    if: ${{ needs.pre-check.outputs.should_skip != 'true' && (github.event.inputs.market == 'all' || github.event.inputs.market == 'twse' || github.event.inputs.market == 'tpex' || github.event.inputs.market == '') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: 檢出專案代碼
+        uses: actions/checkout@v4
+
+      - name: 設定 Python 環境
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: 安裝依賴
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 執行收盤價採集
+        env:
+          TARGET_DATE: ${{ github.event.inputs.target_date || needs.pre-check.outputs.target_date }}
+        run: |
+          python close_price_crawler.py --date "$TARGET_DATE"
+
+      - name: 上傳收盤價產物
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: close-price-parquet
+          path: output/api_close1_*.parquet
+          retention-days: 1
+
+  # -----------------------------------------------------------------
+  # 【全新 v2】TWSE 上市分點爬蟲 (4 個 Runner 獨立分片)
+  # -----------------------------------------------------------------
+  twse-shards:
+    name: TWSE-上市-v2-分片-${{ matrix.shard }}
+    needs: pre-check
+    if: ${{ needs.pre-check.outputs.should_skip != 'true' && (github.event.inputs.market == 'all' || github.event.inputs.market == 'twse' || github.event.inputs.market == '') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+
+    steps:
+      - name: 檢出專案代碼
+        uses: actions/checkout@v4
+
+      - name: 設定 Python 環境
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: 安裝依賴
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 執行 TWSE v2 分片爬蟲 (Shard ${{ matrix.shard }} / 4)
+        env:
+          PYTHONIOENCODING: "utf-8"
+          TARGET_DATE: ${{ github.event.inputs.target_date || needs.pre-check.outputs.target_date }}
+        run: |
+          python twse_crawler_v2.py --date "$TARGET_DATE" --shard-id ${{ matrix.shard }} --num-shards 4 --delay 1.0 --rounds 5
+
+      - name: 上傳 TWSE v2 分片產物
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: twse-shard-${{ matrix.shard }}
+          path: |
+            output/api_absr1_*_twse_shard_${{ matrix.shard }}.parquet
+            logs/crawler_twse_v2_*.log
+          retention-days: 1
+
+  # -----------------------------------------------------------------
+  # 聚合 TWSE 上市分點 (調用全新 merge_twse_v2_shards.py)
+  # -----------------------------------------------------------------
+  merge-twse:
+    name: 合併 TWSE 上市分片產物
+    needs: [pre-check, twse-shards]
+    if: ${{ needs.pre-check.outputs.should_skip != 'true' && needs.twse-shards.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: 檢出專案代碼
+        uses: actions/checkout@v4
+
+      - name: 設定 Python 環境
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 安裝依賴
+        run: |
+          pip install pandas pyarrow openpyxl
+
+      - name: 下載所有 TWSE 分片產物
+        uses: actions/download-artifact@v4
+        with:
+          path: download_shards
+          pattern: twse-shard-*
+
+      - name: 彙整分片檔案並執行合併
+        env:
+          TARGET_DATE: ${{ github.event.inputs.target_date || needs.pre-check.outputs.target_date }}
+        run: |
+          mkdir -p output logs
+          find download_shards -name "*twse_shard_*.parquet" -exec cp {} output/ \; 2>/dev/null || true
+          find download_shards -name "crawler_twse_v2_*.log" -exec cp {} logs/ \; 2>/dev/null || true
+          python merge_twse_v2_shards.py "$TARGET_DATE" --search-dir output --output-dir output
+
+      - name: 上傳 TWSE 最終上市總表
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: twse-final-parquet
+          path: |
+            output/api_absr1_*_twse.parquet
+            output/api_absr1_*_twse.xlsx
+          retention-days: 1
+
+  # -----------------------------------------------------------------
+  # 全市場母表整合作業 (上市櫃合併 + Google Drive 備份)
+  # -----------------------------------------------------------------
+  merge-all:
+    name: 全市場母表整合與雲端備份
+    needs: [pre-check, merge-twse]
+    if: ${{ needs.pre-check.outputs.should_skip != 'true' && needs.merge-twse.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: 檢出專案代碼
+        uses: actions/checkout@v4
+
+      - name: 設定 Python 環境
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 安裝依賴
+        run: |
+          pip install pandas pyarrow openpyxl requests google-api-python-client google-auth
+
+      - name: 下載 TWSE 最終上市總表
+        uses: actions/download-artifact@v4
+        with:
+          name: twse-final-parquet
+          path: output
+
+      - name: 備份至 Google Drive
+        env:
+          GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
+          GDRIVE_UPLOAD_URL: ${{ secrets.GDRIVE_UPLOAD_URL }}
+          GDRIVE_SERVICE_ACCOUNT_KEY: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_KEY }}
+          TARGET_DATE: ${{ github.event.inputs.target_date || needs.pre-check.outputs.target_date }}
+        run: |
+          if [ -f "gdrive_sync.py" ]; then
+            python gdrive_sync.py --date "$TARGET_DATE" || true
+          fi
+
+      - name: 發送 Telegram 推播通知
+        if: always()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TARGET_DATE: ${{ github.event.inputs.target_date || needs.pre-check.outputs.target_date }}
+        run: |
+          if [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$TELEGRAM_CHAT_ID" ]; then
+            curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+              -d "chat_id=${TELEGRAM_CHAT_ID}" \
+              -d "text=🚀 [台股爬蟲 v2] ${TARGET_DATE} 雲端採集任務執行完畢！" || true
+          fi

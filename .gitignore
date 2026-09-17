@@ -31,3 +31,7 @@ output_taifex/
 output_tdcc/
 
 twse_holidays_cache.json
+*.parquet
+*.xlsx
+logs/
+*.log
