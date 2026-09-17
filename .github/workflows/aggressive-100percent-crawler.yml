@@ -1,0 +1,356 @@
+name: 🔴 激進 100% 成功率爬蟲 (實時監控)
+
+env:
+  TZ: "Asia/Taipei"
+  PYTHONIOENCODING: "utf-8"
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_date:
+        description: "指定抓取日期 (YYYY-MM-DD，留空則自動判斷)"
+        required: false
+        default: ""
+      num_shards:
+        description: "分片總數 (並行機器數，預設 6)"
+        required: false
+        default: "6"
+      enable_notifications:
+        description: "啟用實時通知 (Telegram/Email)"
+        required: false
+        default: "true"
+
+  repository_dispatch:
+    types: [trigger-100percent-crawler]
+
+jobs:
+  # 前置檢查：判斷是否為營業日
+  pre-check:
+    name: 📋 營業日檢查
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      should_run: ${{ steps.check.outputs.should_run }}
+      target_date: ${{ steps.check.outputs.target_date }}
+
+    steps:
+      - name: 檢出專案代碼
+        uses: actions/checkout@v4
+
+      - name: 設定 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 檢查是否為營業日
+        id: check
+        run: |
+          TARGET="${{ github.event.inputs.target_date }}"
+          
+          if [ -n "$TARGET" ]; then
+            echo "should_run=true" >> $GITHUB_OUTPUT
+            echo "target_date=$TARGET" >> $GITHUB_OUTPUT
+            echo "[✓] 手動指定日期: $TARGET"
+          else
+            if python trading_calendar.py --check-today 2>/dev/null; then
+              echo "should_run=true" >> $GITHUB_OUTPUT
+              echo "target_date=$(python trading_calendar.py --latest 2>/dev/null || date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+              echo "[✓] 今日為營業日，執行爬蟲"
+            else
+              echo "should_run=false" >> $GITHUB_OUTPUT
+              echo "[⏸] 今日非營業日，跳過"
+            fi
+          fi
+
+  # 主要任務：激進 100% 爬蟲 (單機版)
+  run-100percent-crawler:
+    name: 🔴 TWSE 激進 100% 爬蟲 (無限重試)
+    runs-on: ubuntu-latest
+    needs: pre-check
+    if: needs.pre-check.outputs.should_run == 'true'
+    timeout-minutes: 120  # 2 小時超時
+    
+    env:
+      TARGET_DATE: ${{ needs.pre-check.outputs.target_date }}
+      NUM_SHARDS: ${{ github.event.inputs.num_shards || 1 }}
+      SHARD_ID: 0
+      FORCE_100_PERCENT: "true"
+
+    steps:
+      - name: 📥 檢出專案代碼
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 🐍 設定 Python 環境
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 📦 安裝依賴
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -q
+          pip install pandas numpy requests beautifulsoup4 -q
+
+      - name: 🔑 設定環境變數
+        run: |
+          echo "TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}" >> $GITHUB_ENV
+          echo "TELEGRAM_CHAT_ID=${{ secrets.TELEGRAM_CHAT_ID }}" >> $GITHUB_ENV
+          echo "GOOGLE_DRIVE_FOLDER_ID=${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}" >> $GITHUB_ENV
+
+      - name: 🚀 啟動激進 100% 爬蟲
+        id: crawler
+        run: |
+          echo "[📢] 【激進 100% 爬蟲】啟動"
+          echo "=================================================="
+          echo "交易日期: $TARGET_DATE"
+          echo "模式: 🔴 激進 100% 無限重試"
+          echo "分片配置: $SHARD_ID / $NUM_SHARDS"
+          echo "超時時間: 120 分鐘"
+          echo "=================================================="
+          
+          # 檢查爬蟲文件
+          if [ -f "stock_crawler_coordinator.py" ]; then
+            COORD_SCRIPT="stock_crawler_coordinator.py"
+          else
+            COORD_SCRIPT="stock_data_downloader/stock_crawler_coordinator.py"
+          fi
+          
+          echo "[*] 使用爬蟲: $COORD_SCRIPT"
+          
+          # 執行爬蟲 (激進 100% 模式)
+          python "$COORD_SCRIPT" \
+            --market twse \
+            --workers 1 \
+            --date "$TARGET_DATE" \
+            --force-100-percent \
+            --shard-id 0 \
+            --num-shards "$NUM_SHARDS" \
+            --output-dir output \
+            2>&1 | tee crawler_output.log
+          
+          CRAWLER_EXIT=$?
+          echo "crawler_exit_code=$CRAWLER_EXIT" >> $GITHUB_OUTPUT
+          
+          if [ $CRAWLER_EXIT -eq 0 ]; then
+            echo "[✅] 爬蟲執行成功"
+          else
+            echo "[❌] 爬蟲執行失敗 (Exit: $CRAWLER_EXIT)"
+          fi
+
+      - name: 📊 分析執行結果
+        id: analysis
+        if: always()
+        run: |
+          if [ -f "crawler_output.log" ]; then
+            echo "[📋] 執行日誌摘要："
+            echo "======================================"
+            
+            # 提取關鍵信息
+            grep -i "100% 成功\|成功率\|最終\|完成" crawler_output.log | tail -20
+            
+            echo "======================================"
+            
+            # 統計成功率
+            if grep -q "100% 成功" crawler_output.log; then
+              echo "status=100_percent" >> $GITHUB_OUTPUT
+            elif grep -q "成功率.*9[5-9]%" crawler_output.log; then
+              echo "status=95_percent" >> $GITHUB_OUTPUT
+            elif grep -q "成功率.*9[0-4]%" crawler_output.log; then
+              echo "status=90_percent" >> $GITHUB_OUTPUT
+            else
+              echo "status=unknown" >> $GITHUB_OUTPUT
+            fi
+          fi
+
+      - name: 💾 上傳日誌文件
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crawler-logs-100percent
+          path: |
+            crawler_output.log
+            logs/
+            diagnostics/
+          retention-days: 30
+
+      - name: 💾 上傳輸出數據
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crawler-output-100percent
+          path: |
+            output/
+          retention-days: 7
+
+      - name: 🔔 發送 Telegram 實時通知 (成功)
+        if: steps.crawler.outputs.crawler_exit_code == '0'
+        run: |
+          if [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$TELEGRAM_CHAT_ID" ]; then
+            python -c "
+            import requests
+            msg = '''
+            🎉 【激進 100% 爬蟲完成】
+            
+            交易日期: $TARGET_DATE
+            模式: 🔴 激進 100% 無限重試
+            結果: ✅ 執行成功
+            分片: $SHARD_ID / $NUM_SHARDS
+            
+            詳細日誌已上傳到 GitHub Artifacts
+            '''
+            requests.post(
+              f'https://api.telegram.org/bot{$TELEGRAM_BOT_TOKEN}/sendMessage',
+              json={'chat_id': $TELEGRAM_CHAT_ID, 'text': msg}
+            )
+            " || echo "[⚠] Telegram 通知失敗（密鑰未設定）"
+          fi
+
+      - name: 🔔 發送 Telegram 實時通知 (失敗)
+        if: steps.crawler.outputs.crawler_exit_code != '0' && steps.crawler.outputs.crawler_exit_code != ''
+        run: |
+          if [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$TELEGRAM_CHAT_ID" ]; then
+            python -c "
+            import requests
+            msg = '''
+            ⚠️ 【激進 100% 爬蟲異常】
+            
+            交易日期: $TARGET_DATE
+            模式: 🔴 激進 100% 無限重試
+            結果: ❌ 執行失敗
+            Exit Code: ${{ steps.crawler.outputs.crawler_exit_code }}
+            分片: $SHARD_ID / $NUM_SHARDS
+            
+            請查看 GitHub Artifacts 中的日誌
+            '''
+            requests.post(
+              f'https://api.telegram.org/bot{$TELEGRAM_BOT_TOKEN}/sendMessage',
+              json={'chat_id': $TELEGRAM_CHAT_ID, 'text': msg}
+            )
+            " || echo "[⚠] Telegram 通知失敗（密鑰未設定）"
+          fi
+
+  # 分片並行版本 (可選)
+  run-100percent-sharded:
+    name: 🔴 激進 100% 爬蟲 - 分片 ${{ matrix.shard_id }} / ${{ matrix.total_shards }}
+    runs-on: ubuntu-latest
+    needs: pre-check
+    if: needs.pre-check.outputs.should_run == 'true' && github.event.inputs.num_shards != '1'
+    timeout-minutes: 120
+    
+    strategy:
+      matrix:
+        shard_id: [0, 1, 2, 3, 4, 5]
+        total_shards: [6]
+      fail-fast: false  # 某個分片失敗不影響其他分片
+    
+    env:
+      TARGET_DATE: ${{ needs.pre-check.outputs.target_date }}
+
+    steps:
+      - name: 📥 檢出專案代碼
+        uses: actions/checkout@v4
+
+      - name: 🐍 設定 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 📦 安裝依賴
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -q
+
+      - name: 🚀 執行分片爬蟲 #${{ matrix.shard_id }}
+        id: shard_crawler
+        run: |
+          echo "[📢] 啟動分片 ${{ matrix.shard_id }} 爬蟲"
+          
+          if [ -f "stock_crawler_coordinator.py" ]; then
+            COORD_SCRIPT="stock_crawler_coordinator.py"
+          else
+            COORD_SCRIPT="stock_data_downloader/stock_crawler_coordinator.py"
+          fi
+          
+          python "$COORD_SCRIPT" \
+            --market twse \
+            --workers 1 \
+            --date "$TARGET_DATE" \
+            --force-100-percent \
+            --shard-id ${{ matrix.shard_id }} \
+            --num-shards ${{ matrix.total_shards }} \
+            --output-dir output \
+            2>&1 | tee "shard_${{ matrix.shard_id }}.log"
+          
+          SHARD_EXIT=$?
+          echo "exit_code=$SHARD_EXIT" >> $GITHUB_OUTPUT
+
+      - name: 💾 上傳分片日誌
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shard-${{ matrix.shard_id }}-logs
+          path: shard_${{ matrix.shard_id }}.log
+          retention-days: 30
+
+  # 最後匯總
+  finalize:
+    name: 📊 執行完成匯總
+    runs-on: ubuntu-latest
+    needs: [run-100percent-crawler]
+    if: always()
+    
+    steps:
+      - name: 📥 檢出代碼
+        uses: actions/checkout@v4
+
+      - name: 📥 下載所有 Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: 📊 生成最終報告
+        run: |
+          echo "## 🔴 激進 100% 爬蟲執行報告" > report.md
+          echo "" >> report.md
+          echo "**執行時間**: $(date)" >> report.md
+          echo "**交易日期**: ${{ needs.run-100percent-crawler.outputs.TARGET_DATE || 'N/A' }}" >> report.md
+          echo "" >> report.md
+          echo "### 日誌摘要" >> report.md
+          echo "\`\`\`" >> report.md
+          
+          if [ -f "artifacts/crawler-logs-100percent/crawler_output.log" ]; then
+            grep -i "最終\|完成\|成功率" "artifacts/crawler-logs-100percent/crawler_output.log" | tail -30 >> report.md || echo "無日誌摘要" >> report.md
+          fi
+          
+          echo "\`\`\`" >> report.md
+          echo "" >> report.md
+          echo "### 工作流狀態" >> report.md
+          echo "- 日誌和數據已上傳到 Artifacts" >> report.md
+          echo "- 保留期限: 30 天" >> report.md
+          
+          cat report.md
+
+      - name: 📋 上傳報告
+        uses: actions/upload-artifact@v4
+        with:
+          name: execution-report
+          path: report.md
+          retention-days: 30
+
+      - name: ✅ 完成通知
+        run: |
+          echo "=================================================="
+          echo "🎉 激進 100% 爬蟲執行流程已完成"
+          echo "=================================================="
+          echo ""
+          echo "📊 查看結果："
+          echo "1. GitHub Actions 頁面 → Artifacts 下載"
+          echo "2. 日誌: artifacts/crawler-logs-100percent/"
+          echo "3. 數據: artifacts/crawler-output-100percent/output/"
+          echo ""
+          echo "🔔 實時監控："
+          echo "- Telegram 已發送通知 (如已設定)"
+          echo "- Email 已發送報告 (如已設定)"
+          echo "=================================================="
