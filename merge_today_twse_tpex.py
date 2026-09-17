@@ -14,6 +14,9 @@ if hasattr(sys.stdout, "reconfigure"):
 def merge_20260917(date_str: str = "2026-09-17"):
     output_dir = os.path.join(os.path.dirname(__file__), "output")
     twse_parquet = os.path.join(output_dir, f"api_absr1_{date_str}_{date_str}_twse.parquet")
+    retry_parquet = os.path.join(output_dir, "retries", f"api_absr1_{date_str}_{date_str}_twse_retry.parquet")
+    if not os.path.exists(twse_parquet) and os.path.exists(retry_parquet):
+        twse_parquet = retry_parquet
     base_parquet = os.path.join(output_dir, f"api_absr1_{date_str}_{date_str}.parquet")
     final_excel = os.path.join(output_dir, f"api_absr1_{date_str}_{date_str}.xlsx")
 

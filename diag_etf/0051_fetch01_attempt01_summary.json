@@ -1,6 +1,0 @@
-{
-  "stage": "post",
-  "status": "technical_failure",
-  "reason": "post_http_error:403",
-  "captcha_code": "2ADUG"
-}
