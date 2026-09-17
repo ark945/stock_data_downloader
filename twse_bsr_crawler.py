@@ -671,9 +671,30 @@ class TWSEBrokerCrawler:
             executor.shutdown(wait=False, cancel_futures=True)
 
         rounds_executed = 1
+        
+        # 檢查首輪失敗率，若過高則自動增加起始延遲
+        first_round_total = len(symbols)
+        first_round_success = len(all_dfs)
+        first_round_success_rate = (first_round_success / first_round_total) if first_round_total > 0 else 0.0
+        
+        # 動態調整：首輪成功率 < 30% 表示需要更激進的延遲
+        if first_round_success_rate < 0.3:
+            print(f"[*] 警告：首輪成功率僅 {first_round_success_rate*100:.1f}%，自動啟用超強防護模式（延遲拉長 +1.0s）")
+            base_delay_boost = 1.0
+        elif first_round_success_rate < 0.5:
+            print(f"[*] 提示：首輪成功率 {first_round_success_rate*100:.1f}%，提升防護延遲 +0.5s")
+            base_delay_boost = 0.5
+        else:
+            base_delay_boost = 0.0
+        
+        sys.stdout.flush()
 
         # 第 2 輪起階梯式自適應安全補抓，最後一輪為終極深層收斂輪
-        delay_schedule = [1.2, 1.8, 2.5, 3.2, 4.0, 4.8]  # 各輪安全延遲秒數
+        # 改進：遞進式拉長延遲，特別針對失敗率高的輪次
+        delay_schedule = [1.2, 1.8, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5, 8.5, 9.0]  # 各輪安全延遲秒數（更激進）
+        # 應用動態延遲增強
+        if base_delay_boost > 0:
+            delay_schedule = [d + base_delay_boost for d in delay_schedule]
         
         while failed_symbols and rounds_executed < max_retry_rounds:
             rounds_executed += 1
@@ -782,6 +803,18 @@ class TWSEBrokerCrawler:
             print(f"\n[{ts_all_done}] [+] 全市場標的 100% 抓取達成！(共執行 {rounds_executed} 輪)")
         else:
             print(f"\n[{ts_all_done}] [!] 達到最大補抓輪數 ({max_retry_rounds} 輪)，剩餘技術性失敗標的: {len(failed_symbols)} 檔")
+            
+            # 分析失敗原因分佈，特別針對 403 錯誤
+            failure_by_reason = {}
+            for sym, reason in technical_failure_reason_by_symbol.items():
+                if reason not in failure_by_reason:
+                    failure_by_reason[reason] = []
+                failure_by_reason[reason].append(sym)
+            
+            if "post_http_error:403" in failure_by_reason or "menu_http_error:403" in failure_by_reason:
+                http_403_count = len(failure_by_reason.get("post_http_error:403", [])) + len(failure_by_reason.get("menu_http_error:403", []))
+                if http_403_count > 0:
+                    print(f"[{ts_all_done}] [!] 注意：{http_403_count} 檔標的返回 HTTP 403（TWSE 持久限制），建議次日重試或檢查交易時間")
 
         self.last_run_stats = {
             "success_count": len(all_dfs),
