@@ -1,0 +1,6 @@
+{
+  "stage": "post",
+  "status": "technical_failure",
+  "reason": "captcha_validation_failed",
+  "captcha_code": "Y7ZX4"
+}

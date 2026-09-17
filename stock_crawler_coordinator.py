@@ -170,7 +170,8 @@ def run_full_market_crawler(
     log_msg(f"[*] 目標市場範疇 (Market): {markets.upper()} (產檔規格: {expected_final_name})")
     if num_shards > 1:
         log_msg(f"[*] 雲端分片模式: 節點 {shard_id + 1} / {num_shards} (Shard ID: {shard_id})")
-    log_msg(f"[*] 併發配置: TWSE 上市 {actual_twse_w} Workers (純HTTP高速) | TPEX 上櫃 {actual_tpex_w} Workers (CDP瀏覽器穩健)")
+    twse_delay = 0.6 if num_shards > 1 else 0.3
+    log_msg(f"[*] 併發配置: TWSE 上市 {actual_twse_w} Workers (純HTTP高速, 延遲{twse_delay}s) | TPEX 上櫃 {actual_tpex_w} Workers (CDP瀏覽器穩健)")
     log_msg(f"[*] 上市最大補抓輪數: {max_rounds} 輪")
     log_msg(f"[*] 成果輸出路徑: {output_dir}")
     print("==================================================")
@@ -195,7 +196,9 @@ def run_full_market_crawler(
         total_target_count += len(twse_symbols)
         log_msg(f"[*] 取得上市標的清單: {len(twse_symbols)} 檔 (分片 {shard_id + 1}/{num_shards})")
         
-        twse_crawler = TWSEBrokerCrawler(delay_sec=0.3, max_retries=6)
+        # 雲端分片模式時增加延遲以降低 TWSE 風控壓力
+        twse_delay = 0.6 if num_shards > 1 else 0.3
+        twse_crawler = TWSEBrokerCrawler(delay_sec=twse_delay, max_retries=6)
         twse_dfs, twse_failed, r_exec = twse_crawler.crawl_stocks(
             symbols=twse_symbols,
             trade_date=trade_date,
