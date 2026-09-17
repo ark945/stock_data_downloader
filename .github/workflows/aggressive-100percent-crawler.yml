@@ -53,9 +53,10 @@ jobs:
             echo "[✓] 手動指定日期: $TARGET"
           else
             if python trading_calendar.py --check-today 2>/dev/null; then
+              LATEST_TRADING_DATE=$(python -c "from trading_calendar import get_latest_trading_date; print(get_latest_trading_date())" 2>/dev/null || date +'%Y-%m-%d')
               echo "should_run=true" >> $GITHUB_OUTPUT
-              echo "target_date=$(python trading_calendar.py --latest 2>/dev/null || date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
-              echo "[✓] 今日為營業日，執行爬蟲"
+              echo "target_date=$LATEST_TRADING_DATE" >> $GITHUB_OUTPUT
+              echo "[✓] 今日為營業日，執行爬蟲 (target_date=$LATEST_TRADING_DATE)"
             else
               echo "should_run=false" >> $GITHUB_OUTPUT
               echo "[⏸] 今日非營業日，跳過"
