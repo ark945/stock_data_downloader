@@ -677,8 +677,19 @@ class TWSEBrokerCrawler:
         first_round_success = len(all_dfs)
         first_round_success_rate = (first_round_success / first_round_total) if first_round_total > 0 else 0.0
         
-        # 動態調整：首輪成功率 < 30% 表示需要更激進的延遲
-        if first_round_success_rate < 0.3:
+        # 分析 ETF 失敗率
+        etf_symbols = [s for s in symbols if len(s) <= 6 and (s.startswith("00") or len(s) == 4)]
+        etf_failed = [s for s in failed_symbols if s in etf_symbols]
+        etf_success_rate = 1.0 - (len(etf_failed) / len(etf_symbols)) if etf_symbols else 1.0
+        
+        print(f"[*] 首輪成功分析：整體 {first_round_success_rate*100:.1f}% | ETF 成功率 {etf_success_rate*100:.1f}%")
+        
+        # 動態調整：如果 ETF 成功率 < 20%（基本全滅），進入超激進模式
+        if etf_success_rate < 0.2 and etf_symbols:
+            print(f"[🔴] 臨界警報：ETF 成功率僅 {etf_success_rate*100:.1f}%，切換至 ETF 100% 搶救模式")
+            print(f"[*] 將對所有失敗 ETF 採用延遲遞進策略 + 優先級隊列")
+            base_delay_boost = 2.0  # 最激進
+        elif first_round_success_rate < 0.3:
             print(f"[*] 警告：首輪成功率僅 {first_round_success_rate*100:.1f}%，自動啟用超強防護模式（延遲拉長 +1.0s）")
             base_delay_boost = 1.0
         elif first_round_success_rate < 0.5:
@@ -741,6 +752,28 @@ class TWSEBrokerCrawler:
             retry_crawler._diagnostic_fetch_counts = self._diagnostic_fetch_counts
             if self.stop_event.is_set():
                 retry_crawler.request_stop()
+            
+            # 優先級隊列：對失敗的 ETF 進行排序
+            # 策略：短代碼 ETF (4-5位) 優先，因為這些最難抓
+            def etf_priority(symbol):
+                # 返回值越小優先度越高
+                code_len = len(symbol)
+                is_etf = code_len <= 6 and (symbol.startswith("00") or code_len == 4)
+                
+                if not is_etf:
+                    return 100  # 普通股票放後面
+                elif code_len == 4:
+                    return 1    # 4位 ETF 最優先
+                elif code_len == 5:
+                    return 2    # 5位混合型次優先
+                else:
+                    return 3    # 6位長代碼較不難
+            
+            # 按優先級排序，相同優先級保持原序
+            failed_symbols_sorted = sorted(failed_symbols, key=etf_priority)
+            if failed_symbols_sorted != failed_symbols:
+                print(f"[*] 啟用 ETF 優先級隊列排序：短代碼 ETF 優先補抓")
+            
             still_failed = []
             retry_success = 0
             retry_done_cnt = 0
@@ -749,7 +782,7 @@ class TWSEBrokerCrawler:
             try:
                 future_map = {
                     retry_exec.submit(retry_crawler._crawl_single_worker, s, trade_date): s
-                    for s in failed_symbols
+                    for s in failed_symbols_sorted
                 }
 
                 for fut in as_completed(future_map):
