@@ -142,7 +142,8 @@ def run_full_market_crawler(
     shard_id: int = 0,
     num_shards: int = 1,
     with_close_price: bool = False,
-    limit_symbols: Optional[int] = None
+    limit_symbols: Optional[int] = None,
+    force_100_percent: bool = False  # 新增：100% 模式開關
 ):
     start_dt = get_taipei_now()
     start_str = start_dt.strftime("%Y-%m-%d %H:%M:%S")
@@ -170,9 +171,11 @@ def run_full_market_crawler(
     log_msg(f"[*] 目標市場範疇 (Market): {markets.upper()} (產檔規格: {expected_final_name})")
     if num_shards > 1:
         log_msg(f"[*] 雲端分片模式: 節點 {shard_id + 1} / {num_shards} (Shard ID: {shard_id})")
+    if force_100_percent:
+        log_msg(f"[🔴] 【100% 保證模式】無限重試直到達成 100% 成功率")
     twse_delay = 0.6 if num_shards > 1 else 0.3
     log_msg(f"[*] 併發配置: TWSE 上市 {actual_twse_w} Workers (純HTTP高速, 延遲{twse_delay}s) | TPEX 上櫃 {actual_tpex_w} Workers (CDP瀏覽器穩健)")
-    log_msg(f"[*] 上市最大補抓輪數: {max_rounds} 輪")
+    log_msg(f"[*] 上市最大補抓輪數: {'無限制 (100% 模式)' if force_100_percent else f'{max_rounds} 輪'}")
     log_msg(f"[*] 成果輸出路徑: {output_dir}")
     print("==================================================")
     sys.stdout.flush()
@@ -198,16 +201,39 @@ def run_full_market_crawler(
         
         # 雲端分片模式時增加延遲以降低 TWSE 風控壓力
         twse_delay = 0.6 if num_shards > 1 else 0.3
-        twse_crawler = TWSEBrokerCrawler(delay_sec=twse_delay, max_retries=6)
-        twse_dfs, twse_failed, r_exec = twse_crawler.crawl_stocks(
-            symbols=twse_symbols,
-            trade_date=trade_date,
-            max_workers=actual_twse_w,
-            max_retry_rounds=max_rounds
-        )
+        
+        # 選擇爬蟲模式
+        if force_100_percent:
+            # 100% 模式：無限重試直到達成
+            log_msg(f"[🔴] 使用 TWSE 100% 保證爬蟲（無限重試模式）")
+            from twse_100percent_crawler import TWSE100PercentCrawler
+            
+            crawler_100pct = TWSE100PercentCrawler(max_elapsed_time=None)  # 無時間限制
+            twse_dfs, twse_confirmed_no_data, r_exec = crawler_100pct.crawl_until_100_percent(
+                symbols=twse_symbols,
+                trade_date=trade_date,
+                max_workers=actual_twse_w,
+                timeout_per_attempt=10
+            )
+            
+            twse_failed = []  # 100% 模式下無失敗
+            crawler_100pct.print_summary()
+        else:
+            # 標準模式：有最大輪數限制
+            twse_crawler = TWSEBrokerCrawler(delay_sec=twse_delay, max_retries=6)
+            twse_dfs, twse_failed, r_exec = twse_crawler.crawl_stocks(
+                symbols=twse_symbols,
+                trade_date=trade_date,
+                max_workers=actual_twse_w,
+                max_retry_rounds=max_rounds
+            )
+            twse_confirmed_no_data = []
+        
         collected_dfs.extend(twse_dfs)
         rounds_executed = max(rounds_executed, r_exec)
-        twse_stats = getattr(twse_crawler, "last_run_stats", {}) or {}
+        
+        if not force_100_percent:
+            twse_stats = getattr(twse_crawler, "last_run_stats", {}) or {}
         twse_reason_counts = twse_stats.get("reason_counts", {})
         twse_technical_reason_counts = {
             reason: count
@@ -412,6 +438,7 @@ def main():
     parser.add_argument("--num-shards", type=int, default=1, help="分散式總分片數 (預設 1)")
     parser.add_argument("--with-close-price", action="store_true", help="同步抓取當日 TWSE/TPEX 收盤價 (api_close1_*.parquet)，僅單機模式支援")
     parser.add_argument("--limit-symbols", type=int, default=None, help="限制本次執行標的數，供 CI probe 快速驗證使用")
+    parser.add_argument("--force-100-percent", action="store_true", help="🔴 激進模式：無限重試直到 100% 成功率（忽略 --max-rounds，不用等次日）")
     parser.add_argument("--force", action="store_true", help="強制抓取，忽略營業日/開盤日休市檢查")
     parser.add_argument("--no-check-trading-day", action="store_true", help="停用營業日檢查")
 
@@ -461,7 +488,8 @@ def main():
             shard_id=args.shard_id,
             num_shards=args.num_shards,
             with_close_price=args.with_close_price,
-            limit_symbols=args.limit_symbols
+            limit_symbols=args.limit_symbols,
+            force_100_percent=args.force_100_percent  # 新增
         )
     except KeyboardInterrupt:
         log_msg("[!] 偵測到 Ctrl+C，協調器正在中止目前作業...")
