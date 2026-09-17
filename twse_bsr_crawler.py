@@ -99,6 +99,18 @@ def get_active_listed_symbols(trade_date: Optional[str] = None) -> List[str]:
     except Exception:
         pass
 
+    # 策略 3: 本地 twstock.codes 上市標的保底 (確保全市場不漏抓)
+    try:
+        import twstock
+        twse_fallbacks = [
+            code for code, info in twstock.codes.items()
+            if getattr(info, "market", "") == "上市" and getattr(info, "type", "") in ["股票", "ETF", "臺灣存託憑證"]
+        ]
+        if len(twse_fallbacks) > 500:
+            return sorted(list(dict.fromkeys(twse_fallbacks)))
+    except Exception:
+        pass
+
     # 備用保底清單
     return ["2330", "2317", "2454", "2382", "2308", "2881", "2412", "2882", "2303", "2891"]
 
@@ -132,9 +144,10 @@ class TWSEBrokerCrawler:
         self.delay_sec = delay_sec
         self.max_retries = max_retries
         self.headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
             "Accept-Language": "zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Origin": "https://bsr.twse.com.tw",
             "Referer": "https://bsr.twse.com.tw/bshtm/bsMenu.aspx",
         }
         self.last_run_stats: Dict[str, object] = {
@@ -324,8 +337,21 @@ class TWSEBrokerCrawler:
                 post_html = r_post.text
                 self._write_diagnostic_artifact(stock_id, fetch_no, attempt, "post_response", post_html, "html")
 
-                # 正向精確判定：只要伺服器生成下載連結，代表查詢成功，立刻下載 CSV
-                if "HyperLink_DownloadCSV" in post_html or "bsContent.aspx" in post_html:
+                # 檢查 POST 回應大小 - 如果回應太短（<200 bytes），多半是異常頁面
+                # 正常POST回應應該包含完整的HTML結構 (通常 > 5KB)
+                post_html_len = len(post_html)
+                
+                # 正向精確判定：檢查多種可能的下載連結標記
+                # 標準標記：HyperLink_DownloadCSV, bsContent.aspx
+                # 擴展標記：LinkButton, ctl00_ContentPlaceHolder1_（ASPX 動態控制項）, __doPostBack（JavaScript 回發）
+                download_link_indicators = [
+                    "HyperLink_DownloadCSV" in post_html,
+                    "bsContent.aspx" in post_html,
+                    "ctl00_ContentPlaceHolder1_" in post_html and "LinkButton" in post_html,  # ASPX 伺服器控制項
+                    "__doPostBack" in post_html and "ctl00" in post_html,  # JavaScript 回發機制
+                ]
+                
+                if any(download_link_indicators):
                     if self._sleep_or_stop(0.35):
                         return FetchResult(status="technical_failure", raw_csv=None, reason="interrupted")
                     r_content = session.get(self.CONTENT_URL, timeout=8)
@@ -398,6 +424,32 @@ class TWSEBrokerCrawler:
                         },
                     )
                     return FetchResult(status="no_data", raw_csv="", reason="no_data_reported")
+
+                # 緊急備用策略：即使找不到下載連結標記，也嘗試請求 bsContent.aspx
+                # 可能 TWSE 改了 HTML 結構但 session cookie 已保存
+                if post_html_len < 300:  # POST HTML 太短，直接試著下載
+                    if self._sleep_or_stop(0.35):
+                        return FetchResult(status="technical_failure", raw_csv=None, reason="interrupted")
+                    try:
+                        r_content = session.get(self.CONTENT_URL, timeout=8)
+                        if r_content.status_code == 200 and len(r_content.content) > 100:
+                            raw_text = r_content.content.decode("utf-8-sig", errors="replace")
+                            if "券商買賣股票成交價量資訊" in raw_text or "股票代碼" in raw_text:
+                                self._write_diagnostic_json(
+                                    stock_id,
+                                    fetch_no,
+                                    attempt,
+                                    {
+                                        "stage": "post",
+                                        "status": "success",
+                                        "reason": "emergency_content_fallback",
+                                        "captcha_code": captcha_code,
+                                        "post_html_len": post_html_len,
+                                    },
+                                )
+                                return FetchResult(status="success", raw_csv=raw_text, reason="emergency_content_fallback")
+                    except Exception:
+                        pass  # 備用策略失敗，繼續進行重試
 
                 if "驗證碼" in post_html and ("錯誤" in post_html or "不符" in post_html):
                     last_reason = "captcha_validation_failed"
