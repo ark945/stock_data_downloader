@@ -307,16 +307,15 @@ class TWSEBrokerCrawler:
                     )
                     continue
 
-                # 3. POST 表單送出查詢
-                payload = {
-                    "__VIEWSTATE": viewstate,
-                    "__VIEWSTATEGENERATOR": viewstate_gen,
-                    "__EVENTVALIDATION": event_val,
-                    "RadioButton_Normal": "RadioButton_Normal",
-                    "TextBox_Stkno": str(stock_id).strip(),
-                    "CaptchaControl1": captcha_code,
-                    "btnOK": "查詢",
-                }
+                # 3. POST 表單送出查詢 (動態萃取全部隱藏欄位，確保 __VIEWSTATEENCRYPTED 不遺漏)
+                payload = {inp.get("name"): inp.get("value", "") for inp in soup.find_all("input") if inp.get("name")}
+                payload["RadioButton_Normal"] = "RadioButton_Normal"
+                payload["TextBox_Stkno"] = str(stock_id).strip()
+                payload["CaptchaControl1"] = captcha_code
+                payload["btnOK"] = "查詢"
+                payload.pop("RadioButton_Excd", None)
+                payload.pop("Button_Reset", None)
+
                 r_post = session.post(self.MENU_URL, data=payload, timeout=8)
                 if r_post.status_code != 200:
                     last_reason = f"post_http_error:{r_post.status_code}"

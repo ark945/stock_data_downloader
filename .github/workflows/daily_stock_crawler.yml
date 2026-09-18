@@ -198,16 +198,16 @@ jobs:
           PYTHONIOENCODING: "utf-8"
           TARGET_DATE: ${{ github.event.inputs.target_date || needs.pre-check.outputs.target_date }}
         run: |
-          if [ -f "stock_crawler_coordinator.py" ]; then
-            TARGET_SCRIPT="stock_crawler_coordinator.py"
+          if [ -f "twse_crawler_v2.py" ]; then
+            TARGET_SCRIPT="twse_crawler_v2.py"
           else
-            TARGET_SCRIPT="stock_data_downloader/stock_crawler_coordinator.py"
+            TARGET_SCRIPT="stock_data_downloader/twse_crawler_v2.py"
           fi
 
           if [ -n "$TARGET_DATE" ]; then
-            python "$TARGET_SCRIPT" --market twse --date "$TARGET_DATE" --workers 1 --max-rounds 10 --shard-id ${{ matrix.shard }} --num-shards 6 --no-excel
+            python "$TARGET_SCRIPT" --date "$TARGET_DATE" --shard-id ${{ matrix.shard }} --num-shards 6 --delay 1.0 --rounds 5
           else
-            python "$TARGET_SCRIPT" --market twse --workers 1 --max-rounds 10 --shard-id ${{ matrix.shard }} --num-shards 6 --no-excel
+            python "$TARGET_SCRIPT" --shard-id ${{ matrix.shard }} --num-shards 6 --delay 1.0 --rounds 5
           fi
 
       - name: 上傳 TWSE 分片產物 (Parquet 與 Log)
@@ -219,6 +219,7 @@ jobs:
             **/output/*_twse_shard_*.parquet
             **/output/logs/crawler_twse_shard_*.log
             **/logs/crawler_twse_shard_*.log
+            **/logs/crawler_twse_v2_*.log
           retention-days: 1
 
   # -----------------------------------------------------------------
