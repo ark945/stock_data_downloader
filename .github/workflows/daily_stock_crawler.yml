@@ -205,9 +205,9 @@ jobs:
           fi
 
           if [ -n "$TARGET_DATE" ]; then
-            python "$TARGET_SCRIPT" --date "$TARGET_DATE" --shard-id ${{ matrix.shard }} --num-shards 6 --delay 1.0 --rounds 5
+            python "$TARGET_SCRIPT" --date "$TARGET_DATE" --shard-id ${{ matrix.shard }} --num-shards 6 --delay 0.6 --rounds 3
           else
-            python "$TARGET_SCRIPT" --shard-id ${{ matrix.shard }} --num-shards 6 --delay 1.0 --rounds 5
+            python "$TARGET_SCRIPT" --shard-id ${{ matrix.shard }} --num-shards 6 --delay 0.6 --rounds 3
           fi
 
       - name: 上傳 TWSE 分片產物 (Parquet 與 Log)

@@ -141,11 +141,11 @@ jobs:
     needs: pre-check
     if: ${{ needs.pre-check.outputs.should_skip != 'true' && (github.event.inputs.market == 'all' || github.event.inputs.market == 'twse' || github.event.inputs.market == '') }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3]
+        shard: [0, 1, 2, 3, 4, 5]
 
     steps:
       - name: 檢出專案代碼
@@ -162,12 +162,12 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: 執行 TWSE v2 分片爬蟲 (Shard ${{ matrix.shard }} / 4)
+      - name: 執行 TWSE v2 分片爬蟲 (Shard ${{ matrix.shard }} / 6)
         env:
           PYTHONIOENCODING: "utf-8"
           TARGET_DATE: ${{ github.event.inputs.target_date || needs.pre-check.outputs.target_date }}
         run: |
-          python twse_crawler_v2.py --date "$TARGET_DATE" --shard-id ${{ matrix.shard }} --num-shards 4 --delay 1.0 --rounds 5
+          python twse_crawler_v2.py --date "$TARGET_DATE" --shard-id ${{ matrix.shard }} --num-shards 6 --delay 0.6 --rounds 3
 
       - name: 上傳 TWSE v2 分片產物
         if: always()

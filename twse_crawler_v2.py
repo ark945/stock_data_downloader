@@ -113,9 +113,10 @@ class TWSECrawlerV2:
             "Referer": "https://bsr.twse.com.tw/bshtm/bsMenu.aspx",
         }
 
-        # 熔斷狀態追蹤
+        # 熔斷狀態追蹤 (放寬閾值，避免偶發抖動過度休眠)
         self.consecutive_rate_limits = 0
-        self.circuit_breaker_limit = 2  # 連續 2 次限流即觸發熔斷冷卻
+        self.circuit_breaker_limit = 6  # 連續 6 次才判定為全局限流
+        self.circuit_cooldown = min(self.circuit_cooldown, 25)  # 休眠秒數優化為 25 秒
 
     def _load_checkpoint(self) -> Set[str]:
         if os.path.exists(self.checkpoint_file):
@@ -230,23 +231,17 @@ class TWSECrawlerV2:
                     continue
 
                 code = recognize_captcha(r_img.content)
-                if not code or len(code) != 5:
+                if not code or len(code) not in [5, 6]:
                     continue
 
-                viewstate_enc_el = soup.find("input", {"id": "__VIEWSTATEENCRYPTED"})
-                viewstate_enc = viewstate_enc_el.get("value", "") if viewstate_enc_el else ""
-
-                # 3. POST 表單送出查詢
-                payload = {
-                    "__VIEWSTATE": viewstate,
-                    "__VIEWSTATEGENERATOR": viewstate_gen,
-                    "__VIEWSTATEENCRYPTED": viewstate_enc,
-                    "__EVENTVALIDATION": event_val,
-                    "RadioButton_Normal": "RadioButton_Normal",
-                    "TextBox_Stkno": sym,
-                    "CaptchaControl1": code,
-                    "btnOK": "查詢",
-                }
+                # 3. POST 表單送出查詢 (動態萃取全部隱藏欄位，確保 __VIEWSTATEENCRYPTED 等校驗標記完整)
+                payload = {inp.get("name"): inp.get("value", "") for inp in soup.find_all("input") if inp.get("name")}
+                payload["RadioButton_Normal"] = "RadioButton_Normal"
+                payload["TextBox_Stkno"] = str(sym).strip()
+                payload["CaptchaControl1"] = code
+                payload["btnOK"] = "查詢"
+                payload.pop("RadioButton_Excd", None)
+                payload.pop("Button_Reset", None)
 
                 r_post = session.post(self.MENU_URL, data=payload, timeout=10)
 
