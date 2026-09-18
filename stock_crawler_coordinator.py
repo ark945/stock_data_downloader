@@ -338,10 +338,16 @@ def run_full_market_crawler(
     if num_shards > 1:
         log_msg(f"[*] 雲端分片模式 (Shard {shard_id + 1}/{num_shards})：分片已生成，推播通知將於後續聚合步驟統一發送。")
         if all_failed_items:
-            log_msg(f"[!] 嚴格品質檢查：本分片共有 {len(all_failed_items)} 檔採集失敗，判定本分片失敗！")
+            fail_count = len(all_failed_items)
+            log_msg(f"[!] 分片品質檢查：本分片共有 {fail_count} 檔未取得資料。")
             for itm in all_failed_items:
                 log_msg(f"    - {itm['symbol']} ({itm['name']}): {itm['reason']}")
-            raise RuntimeError(f"分片品質檢查未通過：共 {len(all_failed_items)} 檔採集失敗，拒絕放行！")
+            # 若失敗標的超過 5 檔（且超過分片標的之 15%），判定為連線或驗證碼系統性受阻，嚴格攔截重試
+            fail_ratio = fail_count / max(1, total_target_count)
+            if fail_count > 5 and fail_ratio > 0.15:
+                raise RuntimeError(f"分片品質檢查未通過：共 {fail_count} 檔採集失敗 (失敗率 {fail_ratio:.1%})，判定為系統性阻擋，拒絕放行！")
+            else:
+                log_msg(f"[*] 分片容錯放行：失敗標的共 {fail_count} 檔 (低於系統性阻擋門檻)，放行本分片並由最終通知發送短缺名單。")
         return
 
     log_msg(">>> [通知推播] 檢查並發送執行成果與短缺股票日報...")

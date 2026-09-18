@@ -363,9 +363,12 @@ class TPEXLocalCrawler:
             raw_symbols = ["6488", "6117", "3293", "8069", "5483", "3131", "6274", "3529", "8299", "6180"]
 
         unique_symbols = sorted(list(dict.fromkeys(raw_symbols)))
-        common_stocks = [s for s in unique_symbols if re.match(r"^[1-9][0-9]{3}[A-Za-z]?$", s)]
-        etf_and_bonds = [s for s in unique_symbols if s.startswith("00") or s not in common_stocks]
-        return common_stocks + etf_and_bonds
+        # 僅保留真正有券商買賣日報表之主板上櫃個股 (排除 00...B 債券 ETF 與 77/78 興櫃股票，該等標的無 brokerBS 日報表)
+        mainboard_stocks = [
+            s for s in unique_symbols 
+            if re.match(r"^[1-9][0-9]{3}[A-Za-z]?$", s) and not (s.startswith("77") or s.startswith("78"))
+        ]
+        return mainboard_stocks
 
     def parse_tpex_json_to_dataframe(self, json_data: dict, stock_id: str, trade_date: str) -> Optional[pd.DataFrame]:
         """解析 TPEX API JSON 封包為標準 13 欄位 DataFrame"""
