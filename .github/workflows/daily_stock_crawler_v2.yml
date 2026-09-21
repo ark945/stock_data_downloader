@@ -570,11 +570,14 @@ jobs:
         with:
           pattern: "*-final-parquet"
           path: output
+          merge-multiple: true
 
       - name: 執行全市場母表合併
         env:
           TARGET_DATE: ${{ github.event.inputs.target_date || needs.pre-check.outputs.target_date }}
         run: |
+          mkdir -p output
+          find output -name "api_absr1_*.parquet" -exec cp -n {} output/ \; 2>/dev/null || true
           python merge_shards.py "$TARGET_DATE" "all"
 
       - name: 備份至 Google Drive
