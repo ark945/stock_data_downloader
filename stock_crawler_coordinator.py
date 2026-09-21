@@ -248,12 +248,17 @@ def run_full_market_crawler(
         total_target_count += len(tpex_symbols)
         
         tpex_crawler = TPEXBrokerCrawler()
-        tpex_dfs, tpex_failed = tpex_crawler.crawl_stocks_with_retry(
-            stock_codes=tpex_symbols,
-            trade_date=trade_date,
-            max_rounds=max_rounds,
-            workers=actual_tpex_w
-        )
+        try:
+            tpex_dfs, tpex_failed = tpex_crawler.crawl_stocks_with_retry(
+                stock_codes=tpex_symbols,
+                trade_date=trade_date,
+                max_rounds=max_rounds,
+                workers=actual_tpex_w
+            )
+        except Exception as tpex_e:
+            log_msg(f"[!] TPEX 爬蟲引擎執行異常: {tpex_e}，啟動未完成標的安全兜底標記。")
+            tpex_dfs = []
+            tpex_failed = tpex_symbols
         collected_dfs.extend(tpex_dfs)
         
         for sym in tpex_failed:

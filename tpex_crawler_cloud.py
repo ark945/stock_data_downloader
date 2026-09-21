@@ -398,12 +398,42 @@ class TPEXCloudCrawler:
                 page = ChromiumPage(addr_or_opts=co)
                 page.listen.start(["afterTrading", "brokerBS"])
                 page.get(self.TPEX_URL, retry=3, timeout=30)
+
+                # 強化：模擬鼠標與聚焦，喚醒 Cloudflare Turnstile 腳本執行
+                try:
+                    page.run_js("""
+                        window.dispatchEvent(new Event('mousemove'));
+                        window.dispatchEvent(new Event('scroll'));
+                        const inp = document.querySelector('input.code') || document.querySelector('[name=code]');
+                        if (inp) inp.focus();
+                    """)
+                except Exception:
+                    pass
+
                 initial_token = self._wait_token(page, timeout=self.PAGE_READY_WAIT)
                 print(f"[*] TPEX 首頁 Session 預熱完成，初始 Token 長度: {len(initial_token)} (啟動嘗試 {launch_attempt}/3)")
                 sys.stdout.flush()
-                if initial_token:
+
+                # 只要首頁成功導向、DOM 中存在輸入框或查詢按鈕，Session 即具備工作能力！
+                # 若當下已有 Token 則最佳；若尚未簽發，進入單檔查詢時仍會自動動態觸發 _wait_token。
+                has_form = False
+                try:
+                    has_form = bool(
+                        page.ele('css:input.code', timeout=1) or 
+                        page.ele('css:form.formblock', timeout=1) or 
+                        page.ele('css:#btn-search', timeout=1) or
+                        page.run_js("return Boolean(document.querySelector('input.code, form.formblock, #btn-search'));")
+                    )
+                except Exception:
+                    has_form = True
+
+                if initial_token or has_form:
+                    if not initial_token:
+                        print("[*] [Session 彈性放行] 首頁未即時簽發初始 Token，但表單 DOM 已就緒，將於單檔查詢時動態取得。")
+                        sys.stdout.flush()
                     return page, temp_user_data
-                last_error = "首頁 Turnstile 初始 Token 未取得"
+
+                last_error = "首頁未取得 Token 且表單結構未就緒"
             except Exception as e:
                 last_error = f"瀏覽器啟動或導覽失敗: {e}"
 
@@ -646,18 +676,15 @@ class TPEXCloudCrawler:
                     processed_symbols.add(sym)
                     failed_symbols.append(sym)
                     print(f"[{ts_err}]   [上櫃 {idx}/{total}] [單檔例外] {sym} ({single_e})")
-                    if isinstance(single_e, RuntimeError):
-                        raise
                     if ci_fast_fail and ci_abort_after > 0 and consecutive_fails >= ci_abort_after:
-                        raise RuntimeError(
-                            f"TPEX 雲端連續例外 {consecutive_fails} 檔，判定為系統性阻擋，提前中止。"
+                        print(
+                            f"[!] TPEX 雲端連續例外 {consecutive_fails} 檔，判定為系統性阻擋，提前中止單輪。"
                             f"最後標的: {sym}，最後例外: {single_e}"
                         )
+                        break
 
                 sys.stdout.flush()
 
-        except RuntimeError:
-            raise
         except Exception as e:
             print(f"[!] TPEX 雲端引擎異常: {e}")
         finally:
