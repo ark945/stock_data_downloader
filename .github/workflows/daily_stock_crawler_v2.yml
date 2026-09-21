@@ -141,7 +141,7 @@ jobs:
     needs: pre-check
     if: ${{ needs.pre-check.outputs.should_skip != 'true' && (github.event.inputs.market == 'all' || github.event.inputs.market == 'twse' || github.event.inputs.market == '') }}
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix:
@@ -163,6 +163,7 @@ jobs:
           pip install -r requirements.txt
 
       - name: 執行 TWSE v2 分片爬蟲 (Shard ${{ matrix.shard }} / 6)
+        timeout-minutes: 30
         env:
           PYTHONIOENCODING: "utf-8"
           TARGET_DATE: ${{ github.event.inputs.target_date || needs.pre-check.outputs.target_date }}
@@ -574,20 +575,17 @@ jobs:
         env:
           TARGET_DATE: ${{ github.event.inputs.target_date || needs.pre-check.outputs.target_date }}
         run: |
-          if [ -f "aggregate_and_upload.py" ]; then
-            python aggregate_and_upload.py "$TARGET_DATE" || true
-          fi
+          python merge_shards.py "$TARGET_DATE" "all"
 
       - name: 備份至 Google Drive
+        if: always()
         env:
           GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
           GDRIVE_UPLOAD_URL: ${{ secrets.GDRIVE_UPLOAD_URL }}
           GDRIVE_SERVICE_ACCOUNT_KEY: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_KEY }}
           TARGET_DATE: ${{ github.event.inputs.target_date || needs.pre-check.outputs.target_date }}
         run: |
-          if [ -f "gdrive_sync.py" ]; then
-            python gdrive_sync.py --date "$TARGET_DATE" || true
-          fi
+          python gdrive_sync.py --date "$TARGET_DATE" || true
 
       - name: 發送 Telegram 推播通知
         if: always()

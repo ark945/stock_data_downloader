@@ -24,6 +24,7 @@ import json
 import random
 import logging
 import argparse
+import concurrent.futures
 from datetime import datetime, date
 from typing import List, Dict, Optional, Tuple, Set
 
@@ -143,11 +144,12 @@ class TWSECrawlerV2:
         logger.warning(f"[!] 啟動智慧熔斷冷卻機制，暫停所有請求休眠 {self.circuit_cooldown} 秒...")
         logger.warning("=" * 60)
 
-        # 倒數計時
+        # 倒數計時 (使用標準 logger 避免雲端 CI 無換行緩衝)
+        logger.info(f"[*] 啟動冷卻倒數，共計 {self.circuit_cooldown} 秒...")
         for sec_left in range(self.circuit_cooldown, 0, -5):
-            print(f"\r[*] 冷卻中，剩餘 {sec_left:2d} 秒...", end="", flush=True)
+            logger.info(f"[*] 冷卻中，剩餘 {sec_left:2d} 秒...")
             time.sleep(min(5, sec_left))
-        print("\r[*] 冷卻結束，發送探針驗證 TWSE 服務狀態...        ", flush=True)
+        logger.info("[*] 冷卻結束，發送探針驗證 TWSE 服務狀態...")
 
         # 探針驗證
         for probe_attempt in range(3):
@@ -166,20 +168,25 @@ class TWSECrawlerV2:
 
     def _probe_twse_alive(self) -> bool:
         """發送輕量探針確認是否已解除空白頁限流"""
+        s = requests.Session()
+        s.headers.update(self.headers)
         try:
-            s = requests.Session()
-            s.headers.update(self.headers)
-            r = s.get(self.MENU_URL, timeout=8)
+            r = s.get(self.MENU_URL, timeout=(4.0, 8.0))
             if r.status_code != 200 or len(r.text) < 1000:
                 return False
             soup = BeautifulSoup(r.text, "html.parser")
             return bool(soup.find("input", {"id": "__VIEWSTATE"}))
         except Exception:
             return False
+        finally:
+            try:
+                s.close()
+            except Exception:
+                pass
 
     def fetch_single_symbol(self, symbol: str) -> Tuple[str, Optional[pd.DataFrame], str]:
         """
-        採集單檔標的原始數據並解析
+        採集單檔標的原始數據並解析 (外層硬性超時保護，上限 25 秒防止底層 Socket 懸掛)
         :return: (symbol, DataFrame or None, status: 'success' | 'no_data' | 'failed')
         """
         sym = str(symbol).strip()
@@ -193,6 +200,20 @@ class TWSECrawlerV2:
             except Exception:
                 pass
 
+        # 外層硬性守護器：嚴格限制單檔不得超過 25 秒
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(self._fetch_single_symbol_internal, sym, cached_parquet)
+            try:
+                return future.result(timeout=25.0)
+            except concurrent.futures.TimeoutError:
+                logger.warning(f"[!] 標的 {sym} 連線響應超過 25 秒強制中斷，避免 Runner 掛起，列入待補抓清單")
+                return sym, None, "failed"
+            except Exception as e:
+                logger.warning(f"[!] 標的 {sym} 執行異常中斷 ({e})，列入待補抓清單")
+                return sym, None, "failed"
+
+    def _fetch_single_symbol_internal(self, sym: str, cached_parquet: str) -> Tuple[str, Optional[pd.DataFrame], str]:
+        """單檔內部實際採集嘗試迴圈"""
         for attempt in range(1, self.max_retries + 1):
             # 隨機安全微延遲
             delay = self.base_delay + random.uniform(0.1, 0.4)
@@ -202,8 +223,8 @@ class TWSECrawlerV2:
             session.headers.update(self.headers)
 
             try:
-                # 1. 取得首頁表單欄位與驗證碼
-                r_menu = session.get(self.MENU_URL, timeout=10)
+                # 1. 取得首頁表單欄位與驗證碼 (嚴格連線 4s / 讀取 8s)
+                r_menu = session.get(self.MENU_URL, timeout=(4.0, 8.0))
                 if r_menu.status_code != 200:
                     if r_menu.status_code in [403, 429]:
                         self.consecutive_rate_limits += 1
@@ -226,7 +247,7 @@ class TWSECrawlerV2:
 
                 # 2. 下載驗證碼並辨識
                 captcha_url = "https://bsr.twse.com.tw/bshtm/" + captcha_imgs[0]
-                r_img = session.get(captcha_url, timeout=8)
+                r_img = session.get(captcha_url, timeout=(4.0, 6.0))
                 if r_img.status_code != 200 or not r_img.content:
                     continue
 
@@ -243,7 +264,7 @@ class TWSECrawlerV2:
                 payload.pop("RadioButton_Excd", None)
                 payload.pop("Button_Reset", None)
 
-                r_post = session.post(self.MENU_URL, data=payload, timeout=10)
+                r_post = session.post(self.MENU_URL, data=payload, timeout=(4.0, 8.0))
 
                 # 【關鍵限流偵測】：長度 < 500 bytes 且空 HTML (如 236 bytes 靜默限流)
                 post_len = len(r_post.text)
@@ -269,7 +290,7 @@ class TWSECrawlerV2:
 
                 # 4. 下載 CSV 內容
                 time.sleep(0.4)
-                r_content = session.get(self.CONTENT_URL, timeout=10)
+                r_content = session.get(self.CONTENT_URL, timeout=(4.0, 8.0))
                 if r_content.status_code != 200 or len(r_content.content) < 50:
                     continue
 
@@ -282,9 +303,14 @@ class TWSECrawlerV2:
                     self._save_checkpoint(sym)
                     return sym, df, "success"
 
-            except Exception as e:
+            except Exception:
                 # 遭遇網路短暫異常
                 continue
+            finally:
+                try:
+                    session.close()
+                except Exception:
+                    pass
 
         return sym, None, "failed"
 

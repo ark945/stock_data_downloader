@@ -58,8 +58,9 @@ def send_telegram_report(
 
     market_display = _get_market_display_name(market)
     failed_count = len(failed_stocks)
-    # 達成率 = (有效成交產出 + 經確認無成交略過) / 總目標標的
-    completion_rate = ((success_count + no_trade_count) / total_target * 100) if total_target > 0 else 0
+    # 達成率 = (有效成交產出 + 經確認無成交略過) / 總目標標的 (上限封頂 100.0%)
+    denom = max(total_target, success_count)
+    completion_rate = min(100.0, ((success_count + no_trade_count) / denom * 100)) if denom > 0 else 0
     status_icon = "✅" if failed_count == 0 else ("⚠️" if failed_count < 10 else "❌")
     status_text = f"{market_display} 100% 完整產出" if failed_count == 0 else f"{market_display} 存在 {failed_count} 檔短缺"
     duration_display = duration_str or f"{elapsed_seconds/60:.1f} 分鐘"
@@ -149,8 +150,9 @@ def send_crawler_report_email(
 
     market_display = _get_market_display_name(market)
     failed_count = len(failed_stocks)
-    # 達成率 = (有效成交產出 + 經確認無成交略過) / 總目標標的
-    completion_rate = ((success_count + no_trade_count) / total_target * 100) if total_target > 0 else 0
+    # 達成率 = (有效成交產出 + 經確認無成交略過) / 總目標標的 (上限封頂 100.0%)
+    denom = max(total_target, success_count)
+    completion_rate = min(100.0, ((success_count + no_trade_count) / denom * 100)) if denom > 0 else 0
     status_emoji = "✅" if failed_count == 0 else ("⚠️" if failed_count < 10 else "❌")
     status_text = f"{market_display} 100% 完整產出" if failed_count == 0 else f"{market_display} 存在 {failed_count} 檔短缺"
     duration_display = duration_str or f"{elapsed_seconds/60:.1f} 分鐘"

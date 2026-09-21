@@ -313,9 +313,49 @@ def upload_file_to_gdrive(
 
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1:
-        target_path = sys.argv[1]
-        target_subfolder = sys.argv[2] if len(sys.argv) > 2 else None
-        upload_file_to_gdrive(target_path, subfolder=target_subfolder)
+    import argparse
+    import glob
+
+    parser = argparse.ArgumentParser(description="Google Drive 檔案同步工具")
+    parser.add_argument("file_path", nargs="?", default=None, help="本地檔案路徑")
+    parser.add_argument("subfolder", nargs="?", default=None, help="指定子資料夾 (例如 Log)")
+    parser.add_argument("--date", type=str, default=None, help="按日期批量同步 output 目錄中的產物 (YYYY-MM-DD)")
+    parser.add_argument("--subfolder", dest="flag_subfolder", type=str, default=None, help="子資料夾名稱")
+
+    args = parser.parse_args()
+    sub = args.subfolder or args.flag_subfolder
+
+    if args.date:
+        # 批量搜尋 output 目錄下該日期的檔案並上傳
+        d_str = args.date.strip()
+        print(f"[*] 正在掃描並同步 {d_str} 相關成果至 Google Drive...")
+        patterns = [
+            f"output/*{d_str}*.parquet",
+            f"output/*{d_str}*.xlsx",
+            f"output_margin/*{d_str}*.parquet",
+            f"output_taifex/*{d_str}*.parquet",
+            f"output_tdcc/*{d_str}*.parquet",
+        ]
+        uploaded_count = 0
+        for pat in patterns:
+            for f in glob.glob(pat):
+                print(f"[*] 準備上傳成果檔案: {f}")
+                if upload_file_to_gdrive(f, subfolder=sub):
+                    uploaded_count += 1
+
+        # 同步日誌檔案 (自動存入 Log 子目錄)
+        log_patterns = [
+            f"output/logs/*{d_str}*.log",
+            f"logs/*{d_str.replace('-', '')}*.log",
+        ]
+        for pat in log_patterns:
+            for f in glob.glob(pat):
+                print(f"[*] 準備上傳日誌: {f}")
+                upload_file_to_gdrive(f, subfolder="Log")
+
+        print(f"[✓] {d_str} 檔案批量同步完成 (共上傳 {uploaded_count} 個數據檔案)。")
+    elif args.file_path:
+        upload_file_to_gdrive(args.file_path, subfolder=sub)
     else:
         print("用法: python gdrive_sync.py <本地檔案路徑> [子資料夾名稱例如 Log]")
+        print("   或: python gdrive_sync.py --date YYYY-MM-DD")
