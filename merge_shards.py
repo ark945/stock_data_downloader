@@ -18,6 +18,12 @@ import re
 import sys
 import glob
 import time
+
+if sys.stdout and hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if sys.stderr and hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 import shutil
 import smtplib
 from typing import Optional, Dict, Any, List
@@ -333,15 +339,14 @@ def merge_parquet_shards(output_dir: str = "output", trade_date: str = "", marke
     # 1. 搜尋待合併的 Parquet 檔案
     target_files = []
     if market == "all":
-        # 全市場模式：優先尋找已產出的上市與上櫃標準檔 (支援 output 頂層、所有子目錄與 download_shards)
-        twse_and_tpex = glob.glob(os.path.join(output_dir, "api_absr1_*_twse.parquet")) + \
-                        glob.glob(os.path.join(output_dir, "api_absr1_*_tpex.parquet")) + \
-                        glob.glob(os.path.join(output_dir, "**", "api_absr1_*_twse.parquet"), recursive=True) + \
-                        glob.glob(os.path.join(output_dir, "**", "api_absr1_*_tpex.parquet"), recursive=True) + \
-                        glob.glob(os.path.join("download_shards", "**", "api_absr1_*_twse.parquet"), recursive=True) + \
-                        glob.glob(os.path.join("download_shards", "**", "api_absr1_*_tpex.parquet"), recursive=True) + \
-                        glob.glob(os.path.join(".", "**", "api_absr1_*_twse.parquet"), recursive=True) + \
-                        glob.glob(os.path.join(".", "**", "api_absr1_*_tpex.parquet"), recursive=True)
+        # 全市場模式：優先尋找已產出的上市與上櫃標準檔 (支援指定日期、output 頂層、所有子目錄與 download_shards)
+        date_pattern = f"*{trade_date}*" if trade_date else "*"
+        twse_and_tpex = glob.glob(os.path.join(output_dir, f"api_absr1_{date_pattern}_twse.parquet")) + \
+                        glob.glob(os.path.join(output_dir, f"api_absr1_{date_pattern}_tpex.parquet")) + \
+                        glob.glob(os.path.join(output_dir, "**", f"api_absr1_{date_pattern}_twse.parquet"), recursive=True) + \
+                        glob.glob(os.path.join(output_dir, "**", f"api_absr1_{date_pattern}_tpex.parquet"), recursive=True) + \
+                        glob.glob(os.path.join("download_shards", "**", f"api_absr1_{date_pattern}_twse.parquet"), recursive=True) + \
+                        glob.glob(os.path.join("download_shards", "**", f"api_absr1_{date_pattern}_tpex.parquet"), recursive=True)
         target_files = sorted(list(set(twse_and_tpex)))
         if target_files:
             for f in target_files:
@@ -358,12 +363,12 @@ def merge_parquet_shards(output_dir: str = "output", trade_date: str = "", marke
             # 備援搜尋全部分片檔
             target_files = sorted(glob.glob(os.path.join(output_dir, "*_shard_*.parquet")))
             if not target_files:
-                target_files = sorted(glob.glob(os.path.join(".", "**", "*_shard_*.parquet"), recursive=True))
+                target_files = sorted(glob.glob(os.path.join(output_dir, "**", "*_shard_*.parquet"), recursive=True))
     else:
         shard_glob = f"*_{market}_shard_*.parquet"
         target_files = sorted(glob.glob(os.path.join(output_dir, shard_glob)))
         if not target_files:
-            target_files = sorted(glob.glob(os.path.join(".", "**", shard_glob), recursive=True))
+            target_files = sorted(glob.glob(os.path.join(output_dir, "**", shard_glob), recursive=True))
             if target_files:
                 for sf in target_files:
                     dest = os.path.join(output_dir, os.path.basename(sf))

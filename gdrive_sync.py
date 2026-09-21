@@ -11,6 +11,12 @@ Google Drive 雲端同步模組 (Google Drive Sync Service)
 
 import os
 import sys
+
+if sys.stdout and hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if sys.stderr and hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 import json
 import time
 import base64
@@ -93,7 +99,7 @@ def upload_via_gas(
                     if res_data.get("status") == "success":
                         file_id = res_data.get("file_id")
                         view_link = res_data.get("url") or f"https://drive.google.com/file/d/{file_id}/view"
-                        print(f"[✓] Google Drive 檔案上傳成功 (GAS 模式)！")
+                        print(f"[OK] Google Drive 檔案上傳成功 (GAS 模式)！")
                         print(f"[*] 檔案 ID: {file_id}")
                         print(f"[*] 檢視連結: {view_link}")
                         return {
