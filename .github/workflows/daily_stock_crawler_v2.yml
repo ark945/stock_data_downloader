@@ -574,7 +574,18 @@ jobs:
 
       - name: 執行全市場母表合併
         env:
+          PYTHONIOENCODING: "utf-8"
           TARGET_DATE: ${{ github.event.inputs.target_date || needs.pre-check.outputs.target_date }}
+          GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
+          GDRIVE_UPLOAD_URL: ${{ secrets.GDRIVE_UPLOAD_URL }}
+          GDRIVE_SERVICE_ACCOUNT_KEY: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_KEY }}
+          SMTP_SERVER: "smtp.gmail.com"
+          SMTP_PORT: "587"
+          SENDER_EMAIL: ${{ secrets.SMTP_USER }}
+          SENDER_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
           mkdir -p output
           find output -name "api_absr1_*.parquet" -exec cp -n {} output/ \; 2>/dev/null || true
@@ -589,6 +600,16 @@ jobs:
           TARGET_DATE: ${{ github.event.inputs.target_date || needs.pre-check.outputs.target_date }}
         run: |
           python gdrive_sync.py --date "$TARGET_DATE" || true
+
+      - name: 上傳全市場最終 Parquet 資料包
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-market-final-parquet
+          path: |
+            output/api_absr1_*_*.parquet
+            output/api_absr1_*_*.xlsx
+          retention-days: 7
 
       - name: 發送 Telegram 推播通知
         if: always()
