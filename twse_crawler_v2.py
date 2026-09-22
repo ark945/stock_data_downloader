@@ -397,8 +397,59 @@ class TWSECrawlerV2:
         return res_df
 
     def get_all_twse_symbols(self) -> List[str]:
-        """多重保底獲取全量 TWSE 上市股票與 ETF 代碼清單"""
-        # 1. 本地 twstock 保底
+        """多重保底獲取全量 TWSE 上市股票與 ETF 代碼清單 (優先採用官方 MI_INDEX 當日成交行情)"""
+        # 1. 優先嘗試複用 twse_bsr_crawler 之官方 MI_INDEX 精準成交清單
+        try:
+            from twse_bsr_crawler import get_active_listed_symbols
+            symbols = get_active_listed_symbols(trade_date=self.trade_date)
+            if symbols and len(symbols) > 500:
+                logger.info(f"[✓] 成功從 TWSE 官方收盤行情 (MI_INDEX) 取得 {len(symbols)} 檔當日上市標的 (含創新板)")
+                return sorted(list(dict.fromkeys(symbols)))
+        except Exception as e:
+            logger.warning(f"[!] 調用 twse_bsr_crawler.get_active_listed_symbols 失敗 ({e})，切換獨立連線模式")
+
+        # 2. 獨立請求 TWSE 每日收盤行情 (MI_INDEX) - 精準過濾成交量 > 0 (完整涵蓋 7812 等創新板新掛牌股票)
+        try:
+            clean_date = self.trade_date.replace("-", "") if self.trade_date else ""
+            url = f"https://www.twse.com.tw/rwd/zh/afterTrading/MI_INDEX?response=json&type=ALLBUT0999"
+            if clean_date:
+                url += f"&date={clean_date}"
+            r = requests.get(url, headers=self.headers, timeout=12)
+            if r.status_code == 200:
+                res_json = r.json()
+                for tbl in res_json.get("tables", []):
+                    data_rows = tbl.get("data", [])
+                    if data_rows and len(data_rows[0]) > 2:
+                        active_symbols = []
+                        for row in data_rows:
+                            code = str(row[0]).strip()
+                            vol_str = str(row[2]).replace(",", "").strip()
+                            try:
+                                vol = float(vol_str)
+                                if vol > 0:
+                                    active_symbols.append(code)
+                            except ValueError:
+                                active_symbols.append(code)
+                        if len(active_symbols) > 500:
+                            logger.info(f"[✓] 獨立取得 TWSE MI_INDEX 官方收盤行情共 {len(active_symbols)} 檔活躍標的")
+                            return sorted(list(dict.fromkeys(active_symbols)))
+        except Exception as e:
+            logger.warning(f"[!] 取得 TWSE MI_INDEX 行情失敗 ({e})")
+
+        # 3. TWSE OpenAPI 保底
+        try:
+            url = "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL"
+            r = requests.get(url, timeout=8)
+            if r.status_code == 200:
+                data = r.json()
+                symbols = [item["Code"].strip() for item in data if "Code" in item and len(item["Code"].strip()) in [4, 5, 6]]
+                if len(symbols) > 500:
+                    logger.info(f"[✓] 取得 TWSE OpenAPI 標的清單: {len(symbols)} 檔")
+                    return sorted(list(dict.fromkeys(symbols)))
+        except Exception as e:
+            logger.warning(f"[!] 取得 TWSE OpenAPI 失敗 ({e})")
+
+        # 4. 本地 twstock 保底
         try:
             import twstock
             symbols = [
@@ -406,23 +457,13 @@ class TWSECrawlerV2:
                 if getattr(info, "market", "") == "上市" and getattr(info, "type", "") in ["股票", "ETF", "臺灣存託憑證"]
             ]
             if len(symbols) > 500:
+                logger.info(f"[✓] 取得 twstock 保底清單: {len(symbols)} 檔")
                 return sorted(list(dict.fromkeys(symbols)))
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"[!] twstock 保底讀取失敗 ({e})")
 
-        # 2. TWSE OpenAPI 保底
-        try:
-            url = "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL"
-            r = requests.get(url, timeout=6)
-            if r.status_code == 200:
-                data = r.json()
-                symbols = [item["Code"].strip() for item in data if "Code" in item and len(item["Code"].strip()) in [4, 5, 6]]
-                if len(symbols) > 500:
-                    return sorted(list(dict.fromkeys(symbols)))
-        except Exception:
-            pass
-
-        # 3. 預設清單
+        # 5. 預設十大權值標的保底
+        logger.warning("[!] 所有線上清單均獲取失敗，使用預設核心標的清單")
         return ["2330", "2317", "2454", "2382", "2308", "2881", "2412", "2882", "2303", "2891"]
 
     def run(
