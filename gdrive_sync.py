@@ -242,11 +242,46 @@ def upload_file_to_gdrive(
     file_name = os.path.basename(local_file_path)
     file_size_mb = os.path.getsize(local_file_path) / (1024 * 1024)
 
+    # 同次流程防重複上傳快取檢查 (避免同名大檔案於 merge_shards 與 gdrive_sync 重複上傳)
+    cache_dir = os.path.dirname(os.path.abspath(local_file_path))
+    tracker_file = os.path.join(cache_dir, ".gdrive_uploaded.json")
+    try:
+        if os.path.exists(tracker_file):
+            with open(tracker_file, "r", encoding="utf-8") as tf:
+                upload_cache = json.load(tf)
+            if file_name in upload_cache:
+                info = upload_cache[file_name]
+                # 若 2 小時內已成功上傳且大小一致，直接複用結果
+                if time.time() - info.get("time", 0) < 7200 and abs(info.get("size_mb", 0) - file_size_mb) < 0.01:
+                    print(f"[✓] 檔案近期已同步至 Google Drive，略過重複上傳: {file_name} (ID: {info.get('file_id')})")
+                    return info
+    except Exception:
+        pass
+
+    def _save_to_tracker(res_obj):
+        try:
+            cur_cache = {}
+            if os.path.exists(tracker_file):
+                with open(tracker_file, "r", encoding="utf-8") as tf:
+                    cur_cache = json.load(tf)
+            cur_cache[file_name] = {
+                "file_id": res_obj.get("file_id"),
+                "name": file_name,
+                "web_view_link": res_obj.get("web_view_link"),
+                "size_mb": file_size_mb,
+                "time": time.time()
+            }
+            with open(tracker_file, "w", encoding="utf-8") as tf:
+                json.dump(cur_cache, tf, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
     # 優先嘗試 1：Google Apps Script Web App 模式 (推薦，個人帳號無 quota 限制)
     gas_url = os.environ.get("GDRIVE_UPLOAD_URL", "").strip()
     if gas_url:
         res = upload_via_gas(local_file_path, gas_url, target_folder, subfolder=subfolder)
         if res:
+            _save_to_tracker(res)
             return res
         print("[*] GAS 上傳未完成，嘗試切換 Service Account 備援線路...")
 

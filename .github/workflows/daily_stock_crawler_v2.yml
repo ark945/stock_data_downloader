@@ -547,7 +547,7 @@ jobs:
   # -----------------------------------------------------------------
   merge-all:
     name: 全市場母表整合與雲端備份
-    needs: [pre-check, merge-twse, merge-tpex]
+    needs: [pre-check, close-price, merge-twse, merge-tpex]
     if: ${{ always() && needs.pre-check.outputs.should_skip != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -565,10 +565,10 @@ jobs:
         run: |
           pip install pandas pyarrow openpyxl requests google-api-python-client google-auth
 
-      - name: 下載上市與上櫃總表
+      - name: 下載上市、上櫃總表與收盤價產物
         uses: actions/download-artifact@v4
         with:
-          pattern: "*-final-parquet"
+          pattern: "*-parquet"
           path: output
           merge-multiple: true
 
