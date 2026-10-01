@@ -438,6 +438,7 @@ def run_monthly_revenue_crawler(
     db_path: str = "./local_taiwan_stock.db",
     save_sqlite: bool = True,
     export_csv: bool = False,
+    export_excel: bool = False,
     workers: int = 6,
     upload_gdrive: bool = False,
     overwrite: bool = False
@@ -559,6 +560,16 @@ def run_monthly_revenue_crawler(
         merged_df.to_csv(csv_path, index=False, encoding="utf_8_sig")
         print(f"[✓] 彙總 CSV 儲存成功: {csv_path}")
 
+    # 輸出專業 Excel
+    if export_excel:
+        try:
+            from revenue_to_excel import convert_revenue_parquet_to_excel
+            for pq_file in saved_single_pqs:
+                if os.path.exists(pq_file):
+                    convert_revenue_parquet_to_excel(pq_file)
+        except Exception as e:
+            print(f"[!] 產製 Excel 提示: {e}")
+
     # 寫入 SQLite
     if save_sqlite:
         save_to_sqlite(merged_df, db_path=db_path, if_exists="append")
@@ -596,6 +607,7 @@ def main():
     parser.add_argument("--db-path", default="./local_taiwan_stock.db", help="本地 SQLite 資料庫檔案路徑 (預設: ./local_taiwan_stock.db)")
     parser.add_argument("--no-sqlite", action="store_true", help="停用 SQLite 資料庫寫入")
     parser.add_argument("--export-csv", action="store_true", help="同時匯出標準 CSV 檔案")
+    parser.add_argument("--export-excel", action="store_true", help="同時產製高顏值專業 Excel 報表 (.xlsx)")
     parser.add_argument("--workers", type=int, default=6, help="並發工作執行緒數 (預設: 6)")
     parser.add_argument("--current-cycle", action="store_true", help="強制鎖定當前申報週期之上月 (例: 10/1~10/10 鎖定 9 月營收動態申報)")
     parser.add_argument("--upload-gdrive", action="store_true", help="完成後上傳至 Google Drive 備份")
@@ -618,6 +630,7 @@ def main():
         db_path=args.db_path,
         save_sqlite=not args.no_sqlite,
         export_csv=args.export_csv,
+        export_excel=args.export_excel,
         workers=args.workers,
         upload_gdrive=args.upload_gdrive
     )

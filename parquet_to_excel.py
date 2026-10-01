@@ -24,6 +24,16 @@ def convert_parquet_to_excel(parquet_path: str, excel_path: str = None) -> bool:
         print(f"[!] 錯誤：找不到 Parquet 檔案: {parquet_path}")
         return False
 
+    base_name = os.path.basename(parquet_path)
+    # 智慧分流：若為月營收 Parquet，直接套用頂級金融格式化引擎
+    if "api_revenue" in base_name:
+        try:
+            from revenue_to_excel import convert_revenue_parquet_to_excel
+            res = convert_revenue_parquet_to_excel(parquet_path, excel_path)
+            return bool(res)
+        except Exception as e:
+            print(f"[!] 轉調專業月營收轉換引擎提示: {e}，切回通用轉換流程...")
+
     if excel_path is None:
         excel_path = os.path.splitext(parquet_path)[0] + ".xlsx"
 
