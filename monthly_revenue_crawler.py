@@ -39,7 +39,26 @@ from typing import List, Tuple, Dict, Any, Optional
 
 import requests
 import pandas as pd
-from tqdm import tqdm
+
+try:
+    from tqdm import tqdm
+except ImportError:
+    class DummyTqdm:
+        """輕量進度條 Fallback：當環境缺少 tqdm 套件時安全無聲運作"""
+        def __init__(self, iterable=None, total=None, desc="", unit="", **kwargs):
+            self.iterable = iterable
+            self.total = total
+            self.n = 0
+        def __enter__(self):
+            return self
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            pass
+        def update(self, n=1):
+            self.n += n
+        def set_postfix(self, ordered_dict=None, refresh=True, **kwargs):
+            pass
+    def tqdm(iterable=None, **kwargs):
+        return DummyTqdm(iterable=iterable, **kwargs)
 
 try:
     from dotenv import load_dotenv

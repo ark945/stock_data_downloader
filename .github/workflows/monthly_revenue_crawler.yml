@@ -52,7 +52,7 @@ jobs:
 
       - name: 安裝月營收爬蟲依賴套件
         run: |
-          pip install requests pandas pyarrow beautifulsoup4 lxml google-api-python-client google-auth
+          pip install requests pandas pyarrow beautifulsoup4 lxml google-api-python-client google-auth tqdm openpyxl
 
       - name: 執行月營收採集並同步雲端硬碟 (依照月份切檔 Parquet)
         env:
