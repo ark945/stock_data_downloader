@@ -196,8 +196,60 @@ def reconcile_tdcc(trade_date: str) -> bool:
     return False
 
 
-def reconcile_single_day(trade_date: str) -> Dict[str, bool]:
-    """針對單一交易日執行 4 項輕量數據對齊檢查與補齊"""
+def reconcile_revenue(target_ym: str = "", force: bool = False) -> bool:
+    """檢查並補齊月營收資料 (MOPS，依照月份切檔)"""
+    from monthly_revenue_crawler import get_latest_published_ym, run_monthly_revenue_crawler
+    
+    now = datetime.now(timezone.utc).astimezone(TAIPEI_TZ)
+    # 若未指定月份，根據當日判斷：1~11 日優先鎖定上月動態申報，11 日後鎖定上月完整申報
+    if target_ym:
+        ym = target_ym
+    elif now.day <= 11:
+        ym = get_latest_published_ym(target_prev_month=True)
+    else:
+        ym = get_latest_published_ym(target_prev_month=False)
+
+    filename = f"api_revenue_{ym}.parquet"
+    out_dir = "./output_revenue"
+    out_path = os.path.join(out_dir, filename)
+
+    # 判定是否需要執行抓取：
+    # 1. 檔案不存在 或 強制指定 force
+    # 2. 處於每月 1~11 日動態申報期 (各公司陸續公告中，需動態更新)
+    should_fetch = force or not os.path.exists(out_path) or (now.day <= 11 and not target_ym)
+
+    if not should_fetch:
+        print(f"[✓] {ym} 月營收檔案已存在 (依月份切檔): {filename}")
+        return True
+
+    print(f"[*] 開始執行月營收巡檢與同步 ({ym})...")
+    try:
+        df = run_monthly_revenue_crawler(
+            target_ym=ym,
+            months=1,
+            output_dir=out_dir,
+            save_sqlite=True,
+            upload_gdrive=True
+        )
+        if df is not None and not df.empty:
+            print(f"[✓] {ym} 月營收同步成功！(共 {len(df):,} 筆)")
+            return True
+        else:
+            print(f"[ℹ️] {ym} 月營收官方 MOPS 尚未生成或公佈資料。")
+            # 若為月初上月尚無資料，檢查上上月是否就緒以確保基礎庫存完整
+            if now.day <= 11 and not target_ym:
+                prev2_ym = get_latest_published_ym(target_prev_month=False)
+                prev2_file = os.path.join(out_dir, f"api_revenue_{prev2_ym}.parquet")
+                if os.path.exists(prev2_file):
+                    print(f"[✓] 基礎存量 {prev2_ym} 月營收已就緒: {os.path.basename(prev2_file)}")
+                    return True
+    except Exception as e:
+        print(f"[!] 月營收抓取異常: {e}")
+    return False
+
+
+def reconcile_single_day(trade_date: str, check_revenue: bool = True) -> Dict[str, bool]:
+    """針對單一交易日執行輕量數據對齊檢查與補齊"""
     print("=" * 65)
     print(f"🛡️ 啟動台股輕量數據健康檢查與補齊程序 (交易日: {trade_date})")
     print("=" * 65)
@@ -209,6 +261,9 @@ def reconcile_single_day(trade_date: str) -> Dict[str, bool]:
         "tdcc": reconcile_tdcc(trade_date)
     }
 
+    if check_revenue:
+        results["revenue"] = reconcile_revenue()
+
     all_ok = all(results.values())
     status_icon = "🎉 完美對齊" if all_ok else "⚠️ 部分缺失"
     print(f"\n[*] 檢查與補齊結果 ({trade_date}): {status_icon}")
@@ -217,7 +272,7 @@ def reconcile_single_day(trade_date: str) -> Dict[str, bool]:
     return results
 
 
-def reconcile_range(start_date: str, end_date: str):
+def reconcile_range(start_date: str, end_date: str, check_revenue: bool = True):
     """批次回補歷史區間輕量數據"""
     start_dt = datetime.strptime(start_date, "%Y-%m-%d")
     end_dt = datetime.strptime(end_date, "%Y-%m-%d")
@@ -236,7 +291,7 @@ def reconcile_range(start_date: str, end_date: str):
 
     for idx, d_str in enumerate(dates):
         print(f"\n[{idx+1}/{len(dates)}] 巡檢日期: {d_str}")
-        reconcile_single_day(d_str)
+        reconcile_single_day(d_str, check_revenue=(check_revenue and idx == len(dates) - 1))
         time.sleep(1.0)
 
 
@@ -245,18 +300,21 @@ def main():
     parser.add_argument("--date", default="", help="指定檢查與補齊之單一交易日 (YYYY-MM-DD)")
     parser.add_argument("--start-date", default="", help="批次補齊起始日 (YYYY-MM-DD)")
     parser.add_argument("--end-date", default="", help="批次補齊結束日 (YYYY-MM-DD)")
+    parser.add_argument("--include-revenue", action="store_true", help="同時巡檢月營收數據 (預設已包含)")
+    parser.add_argument("--skip-revenue", action="store_true", help="跳過月營收數據巡檢")
 
     args = parser.parse_args()
 
     today_str = datetime.now(timezone.utc).astimezone(TAIPEI_TZ).strftime("%Y-%m-%d")
+    check_rev = not args.skip_revenue
 
     if args.start_date:
         end_d = args.end_date if args.end_date else today_str
-        reconcile_range(args.start_date, end_d)
+        reconcile_range(args.start_date, end_d, check_revenue=check_rev)
         return
 
     target_d = args.date if args.date else today_str
-    reconcile_single_day(target_d)
+    reconcile_single_day(target_d, check_revenue=check_rev)
 
 
 if __name__ == "__main__":

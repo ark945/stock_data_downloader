@@ -29,6 +29,8 @@ debug_*.csv
 output_margin/
 output_taifex/
 output_tdcc/
+output_revenue/
+*.db
 
 twse_holidays_cache.json
 *.parquet

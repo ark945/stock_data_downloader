@@ -1,0 +1,103 @@
+name: 台股全市場月營收爬蟲 (Monthly Revenue Crawler)
+
+env:
+  TZ: "Asia/Taipei"
+  PYTHONIOENCODING: "utf-8"
+
+on:
+  schedule:
+    # 官方公開資訊觀測站 (MOPS) 每月 1~10 日為法定營業收入申報期
+    # 設定每月 1~12 日 台北時間 09:30 與 21:30 (UTC 01:30 與 13:30) 自動執行
+    - cron: "30 1,13 1-12 * *"
+
+  workflow_dispatch:
+    inputs:
+      target_month:
+        description: "指定目標年月 (YYYY-MM 如 2026-09，或民國 115_09；留空則自動鎖定當前申報週期)"
+        required: false
+        default: ""
+      months:
+        description: "回溯月份數 (預設: 1，如回補歷史可設更多)"
+        required: false
+        default: "1"
+      export_csv:
+        description: "是否同步產出 CSV 報表"
+        required: false
+        type: boolean
+        default: false
+      send_notification:
+        description: "是否發送 Telegram 完成通知"
+        required: false
+        type: boolean
+        default: false
+
+  repository_dispatch:
+    types: [trigger-monthly-revenue, run-monthly-revenue]
+
+jobs:
+  crawl-monthly-revenue:
+    name: 採集 MOPS 全市場 6 大板塊月營收 (依照月份切檔)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: 簽出代碼庫 (Checkout)
+        uses: actions/checkout@v4
+
+      - name: 設置 Python 環境
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: 安裝月營收爬蟲依賴套件
+        run: |
+          pip install requests pandas pyarrow beautifulsoup4 lxml google-api-python-client google-auth
+
+      - name: 執行月營收採集並同步雲端硬碟 (依照月份切檔 Parquet)
+        env:
+          PYTHONIOENCODING: "utf-8"
+          GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
+          GDRIVE_UPLOAD_URL: ${{ secrets.GDRIVE_UPLOAD_URL }}
+          GDRIVE_SERVICE_ACCOUNT_KEY: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_KEY }}
+          TARGET_MONTH: ${{ github.event.inputs.target_month }}
+          MONTHS: ${{ github.event.inputs.months || '1' }}
+          EXPORT_CSV: ${{ github.event.inputs.export_csv }}
+        run: |
+          CMD="python monthly_revenue_crawler.py --upload-gdrive"
+          if [ -n "$TARGET_MONTH" ]; then
+            CMD="$CMD --month $TARGET_MONTH --months $MONTHS"
+          else
+            CMD="$CMD --current-cycle --months $MONTHS"
+          fi
+
+          if [ "$EXPORT_CSV" = "true" ]; then
+            CMD="$CMD --export-csv"
+          fi
+
+          echo "[*] 執行指令: $CMD"
+          eval $CMD
+
+      - name: 上傳月營收數據產物 (依照月份切檔 Parquet)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: monthly-revenue-parquet
+          path: output_revenue/api_revenue_*.parquet
+          retention-days: 30
+
+      - name: 發送 Telegram 完成通知 (可選)
+        if: ${{ github.event.inputs.send_notification == 'true' }}
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python -c "
+          import os, requests
+          token = os.getenv('TELEGRAM_BOT_TOKEN')
+          chat_id = os.getenv('TELEGRAM_CHAT_ID')
+          if token and chat_id:
+              msg = '🎉 [stock_data_downloader] MOPS 全市場月營收已採集完成，單月切檔 Parquet 已同步 Google Drive！'
+              url = f'https://api.telegram.org/bot{token}/sendMessage'
+              requests.post(url, json={'chat_id': chat_id, 'text': msg}, timeout=10)
+          "
