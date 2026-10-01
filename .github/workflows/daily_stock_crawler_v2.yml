@@ -94,6 +94,15 @@ jobs:
             python "$CHECK_SCRIPT" "$SPECIFIED_DATE"
           fi
 
+      - name: 產出並同步最新券商分點對照表 (broker_name_map.json)
+        if: ${{ steps.check.outputs.should_skip != 'true' }}
+        env:
+          GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
+          GDRIVE_UPLOAD_URL: ${{ secrets.GDRIVE_UPLOAD_URL }}
+          GDRIVE_SERVICE_ACCOUNT_KEY: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_KEY }}
+        run: |
+          python update_broker_mappings.py --upload-gdrive
+
   # -----------------------------------------------------------------
   # 每日收盤價採集 (TWSE + TPEX)
   # -----------------------------------------------------------------
@@ -609,6 +618,7 @@ jobs:
           path: |
             output/api_absr1_*_*.parquet
             output/api_absr1_*_*.xlsx
+            output/broker_name_map.json
           retention-days: 7
 
       - name: 發送 Telegram 推播通知

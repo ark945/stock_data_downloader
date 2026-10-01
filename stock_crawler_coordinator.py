@@ -456,6 +456,13 @@ def main():
         print(f"[*] [日誌系統] 執行日誌檔案已建立: {log_filepath}")
         sys.stdout.flush()
 
+        # 爬蟲啟動一開始：自動確保券商分點中文對照表 (broker_name_map.json) 產出就緒
+        try:
+            from update_broker_mappings import ensure_broker_mappings
+            ensure_broker_mappings(verbose=True)
+        except Exception as e:
+            print(f"[!] 券商分點對照表前置檢查提示: {e}")
+
         target_d = args.date or get_latest_trading_date()
         if not args.no_check_trading_day:
             from trading_calendar import should_proceed_crawler

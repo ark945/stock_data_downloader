@@ -628,6 +628,14 @@ def main():
 
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+    # 爬蟲啟動一開始：確保券商分點中文對照表 (broker_name_map.json) 產出就緒
+    try:
+        from update_broker_mappings import ensure_broker_mappings
+        ensure_broker_mappings(verbose=False)
+    except Exception:
+        pass
+
     crawler = TWSECrawlerV2(
         trade_date=args.date,
         base_delay=args.delay,
