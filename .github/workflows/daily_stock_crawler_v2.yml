@@ -297,7 +297,7 @@ jobs:
     needs: [pre-check, tpex-probe]
     if: ${{ needs.pre-check.outputs.should_skip != 'true' && needs.tpex-probe.result == 'success' && (github.event.inputs.market == 'all' || github.event.inputs.market == 'tpex' || github.event.inputs.market == '') }}
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
 
     steps:
       - name: 檢出專案代碼 (Checkout)
@@ -403,7 +403,7 @@ jobs:
     needs: [pre-check, tpex-probe, tpex-canary]
     if: ${{ needs.pre-check.outputs.should_skip != 'true' && needs.tpex-probe.result == 'success' && needs.tpex-canary.result == 'success' && (github.event.inputs.market == 'all' || github.event.inputs.market == 'tpex' || github.event.inputs.market == '') }}
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       max-parallel: 2
@@ -515,7 +515,7 @@ jobs:
   merge-tpex:
     name: 合併 TPEX 上櫃分片產物
     needs: [pre-check, tpex-canary, tpex-shards]
-    if: ${{ needs.pre-check.outputs.should_skip != 'true' && needs.tpex-canary.result == 'success' && needs.tpex-shards.result == 'success' && (github.event.inputs.market == 'all' || github.event.inputs.market == 'tpex' || github.event.inputs.market == '') }}
+    if: ${{ always() && needs.pre-check.outputs.should_skip != 'true' && !cancelled() && needs.tpex-canary.result == 'success' && (needs.tpex-shards.result == 'success' || needs.tpex-shards.result == 'failure' || needs.tpex-shards.result == 'cancelled') && (github.event.inputs.market == 'all' || github.event.inputs.market == 'tpex' || github.event.inputs.market == '') }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
