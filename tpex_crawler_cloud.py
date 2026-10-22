@@ -414,6 +414,22 @@ class TPEXCloudCrawler:
                 print(f"[*] TPEX 首頁 Session 預熱完成，初始 Token 長度: {len(initial_token)} (啟動嘗試 {launch_attempt}/3)")
                 sys.stdout.flush()
 
+                # 若沒有拿到初始 Token，嘗試檢測與穿透 Cloudflare 互動驗證框
+                if not initial_token:
+                    try:
+                        title = page.title or ""
+                        print(f"[*] 首頁標題檢測: '{title}' (網址: {page.url})")
+                        cf_cb = page.ele('css:input[type="checkbox"]', timeout=2) or page.ele('css:#challenge-stage input', timeout=2) or page.ele('css:.ctp-checkbox-label', timeout=2)
+                        if cf_cb:
+                            print("[*] 偵測到 Cloudflare 互動式驗證框，嘗試點擊穿透...")
+                            cf_cb.click()
+                            time.sleep(3)
+                            initial_token = self._wait_token(page, timeout=20)
+                            if initial_token:
+                                print(f"[*] 點擊驗證框後成功取得 Token，長度: {len(initial_token)}")
+                    except Exception as cf_e:
+                        print(f"[!] 驗證框輔助點擊異常: {cf_e}")
+
                 # 只要首頁成功導向、DOM 中存在輸入框或查詢按鈕，Session 即具備工作能力！
                 # 若當下已有 Token 則最佳；若尚未簽發，進入單檔查詢時仍會自動動態觸發 _wait_token。
                 has_form = False
@@ -433,7 +449,12 @@ class TPEXCloudCrawler:
                         sys.stdout.flush()
                     return page, temp_user_data
 
-                last_error = "首頁未取得 Token 且表單結構未就緒"
+                title = ""
+                try:
+                    title = page.title
+                except Exception:
+                    pass
+                last_error = f"首頁未取得 Token 且表單結構未就緒 (當前標題: '{title}')"
             except Exception as e:
                 last_error = f"瀏覽器啟動或導覽失敗: {e}"
 

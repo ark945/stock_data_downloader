@@ -371,9 +371,12 @@ jobs:
               rm -rf output/*_tpex_shard_0.parquet output/logs/crawler_tpex_shard_0.log logs/crawler_tpex_shard_0.log downloads_tpex_cloud || true
               pkill -9 -f 'chrome|chromium' 2>/dev/null || true
               warp-cli --accept-tos disconnect 2>/dev/null || true
+              warp-cli --accept-tos registration delete 2>/dev/null || true
+              sleep 2
               warp-cli --accept-tos registration new 2>/dev/null || warp-cli --accept-tos register 2>/dev/null || true
-              sleep 8
+              warp-cli --accept-tos mode warp 2>/dev/null || true
               warp-cli --accept-tos connect 2>/dev/null || true
+              sleep 5
               sleep "$COOLDOWN"
             fi
           done
@@ -403,7 +406,7 @@ jobs:
     timeout-minutes: 60
     strategy:
       fail-fast: false
-      max-parallel: 1
+      max-parallel: 2
       matrix:
         shard: [1, 2, 3, 4, 5, 6, 7]
 
@@ -457,7 +460,7 @@ jobs:
             TARGET_SCRIPT="stock_data_downloader/stock_crawler_coordinator.py"
           fi
 
-          # 7 分片錯峰啟動 (每分片錯開 15s)；在單路串行下維持溫和節奏，避免同時撞擊 TPEX 首頁與 Session 握手
+          # 7 分片錯峰啟動 (每分片錯開 15s)；在雙路並行下維持溫和節奏，避免同時撞擊 TPEX 首頁與 Session 握手
           sleep $(( ${{ matrix.shard }} * 15 ))
 
           ATTEMPTS="${TPEX_SHARD_ATTEMPTS:-2}"
@@ -482,9 +485,12 @@ jobs:
               rm -rf output/*_tpex_shard_${{ matrix.shard }}.parquet output/logs/crawler_tpex_shard_${{ matrix.shard }}.log logs/crawler_tpex_shard_${{ matrix.shard }}.log downloads_tpex_cloud || true
               pkill -9 -f 'chrome|chromium' 2>/dev/null || true
               warp-cli --accept-tos disconnect 2>/dev/null || true
+              warp-cli --accept-tos registration delete 2>/dev/null || true
+              sleep 2
               warp-cli --accept-tos registration new 2>/dev/null || warp-cli --accept-tos register 2>/dev/null || true
-              sleep 8
+              warp-cli --accept-tos mode warp 2>/dev/null || true
               warp-cli --accept-tos connect 2>/dev/null || true
+              sleep 5
               sleep "$COOLDOWN"
             fi
           done
